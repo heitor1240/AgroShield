@@ -1121,7 +1121,112 @@ Crie o JSON de alerta cruzando os DADOS DE SATÉLITE com as regras estritas do M
 }
 
 // ============================================================================
-// 5. ROTA OFICIAL DO FRONT-END: POST /api/analyze-field
+// 5. PORTÃO DE CERTEZA PARA SMS 2G + ALERTAS OFICIAIS INMET / DEFESA CIVIL
+// ============================================================================
+let cacheAvisosInmet = { timestamp: 0, avisos: [] };
+
+/**
+ * Consulta o feed público oficial de avisos meteorológicos do INMET (base usada pela Defesa Civil).
+ * Verifica com Turf.js se a coordenada (lat, lng) do talhão está dentro do polígono de algum aviso ativo.
+ */
+async function buscarAlertaOficialInmet(lat, lng, ufRegiao) {
+  const regioesBrasil = ['PR', 'BA', 'CERRADO', 'SUL_RS_SC', 'SUDESTE', 'BR'];
+  if (!regioesBrasil.includes(ufRegiao)) return null;
+
+  try {
+    const agora = Date.now();
+    if (agora - cacheAvisosInmet.timestamp > 5 * 60 * 1000) {
+      const res = await axios.get('https://apiprevmet3.inmet.gov.br/avisos/ativos', {
+        timeout: 2200,
+      });
+      const todos = [
+        ...(Array.isArray(res?.data?.hoje) ? res.data.hoje : []),
+        ...(Array.isArray(res?.data?.futuro) ? res.data.futuro : []),
+      ];
+      cacheAvisosInmet = { timestamp: agora, avisos: todos };
+    }
+
+    const ponto = turf.point([Number(lng), Number(lat)]);
+    for (const aviso of cacheAvisosInmet.avisos) {
+      if (!aviso?.poligono) continue;
+      try {
+        const geo = typeof aviso.poligono === 'string' ? JSON.parse(aviso.poligono) : aviso.poligono;
+        if (geo && (geo.type === 'Polygon' || geo.type === 'MultiPolygon')) {
+          if (turf.booleanPointInPolygon(ponto, geo)) {
+            return {
+              id: aviso.id || null,
+              evento: aviso.descricao || aviso.aviso || 'Alerta Meteorológico',
+              severidade: aviso.severidade || 'Perigo Potencial',
+              fonte: 'INMET / Defesa Civil',
+            };
+          }
+        }
+      } catch {
+        // Ignora polígono malformado individual
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Portão Determinístico de Certeza para Disparo Ativo de SMS 2G:
+ * NUNCA confia apenas na IA para disparar SMS ao agricultor.
+ * Só autoriza o envio quando há certeza física multi-fonte:
+ * 1. Leituras reais (NASA/Open-Meteo) ou simulação explícita;
+ * 2. Piso físico determinístico 'red' OU consenso duplo (INMET Perigo/Grande Perigo + risco físico >= yellow).
+ */
+function avaliarCertezaAlertaSms(nasaMetrics, regiao, alertaOficialInmet = null, opcoes = {}) {
+  const lim = regiao?.limites || { chuvaRedMm: 45, ventoRedKmh: 20, umidadeRedPct: 80 };
+  const ventoKmh = nasaMetrics.ventoKmh ?? Number((nasaMetrics.windSpeed2m * 3.6).toFixed(1));
+  const temDadoRealOuSimulado =
+    Boolean(opcoes.isSimulated) ||
+    Boolean(nasaMetrics.nasaLive) ||
+    Boolean(nasaMetrics.openMeteoLive);
+
+  if (!temDadoRealOuSimulado) {
+    return {
+      autorizado: false,
+      motivo: 'SMS bloqueado: sem leitura ao vivo confirmada (modo fallback offline).',
+    };
+  }
+
+  const inmetCritico =
+    alertaOficialInmet && /grande perigo|perigo(?! potencial)/i.test(String(alertaOficialInmet.severidade || ''));
+
+  const criterioChuva = nasaMetrics.predictedRain >= lim.chuvaRedMm;
+  const criterioVento = ventoKmh >= lim.ventoRedKmh;
+  const criterioUmidade = nasaMetrics.soilMoisture >= lim.umidadeRedPct;
+  const fisicoVermelho = nasaMetrics.minPhysicalRisk === 'red';
+
+  if (fisicoVermelho && (criterioChuva || criterioVento || criterioUmidade)) {
+    const causas = [];
+    if (criterioChuva) causas.push(`chuva ${nasaMetrics.predictedRain}mm >= ${lim.chuvaRedMm}mm`);
+    if (criterioVento) causas.push(`vento ${ventoKmh}km/h >= ${lim.ventoRedKmh}km/h`);
+    if (criterioUmidade) causas.push(`solo ${nasaMetrics.soilMoisture}% >= ${lim.umidadeRedPct}%`);
+    return {
+      autorizado: true,
+      motivo: `Certeza física confirmada (${causas.join(', ')})`,
+    };
+  }
+
+  if (inmetCritico && nasaMetrics.minPhysicalRisk !== 'green') {
+    return {
+      autorizado: true,
+      motivo: `Consenso duplo: ${alertaOficialInmet.fonte} (${alertaOficialInmet.severidade}) + satélite`,
+    };
+  }
+
+  return {
+    autorizado: false,
+    motivo: 'SMS bloqueado pelo Portão de Certeza Física (sem confirmação severa multi-fonte).',
+  };
+}
+
+// ============================================================================
+// 5.1 ROTA OFICIAL DO FRONT-END: POST /api/analyze-field
 // ============================================================================
 app.post('/api/analyze-field', async (req, res) => {
   try {
@@ -1136,30 +1241,31 @@ app.post('/api/analyze-field', async (req, res) => {
     );
     const lim = fieldReq.regiao.limites;
 
-    // 2.1 Consulta NASA POWER (ou aplica cenário simulado pelo painel se simulateRisk for enviado pelo Front-end)
-    let nasaBruto = await buscarDadosNasaParaFrontEnd(
-      fieldReq.centroid.lat,
-      fieldReq.centroid.lng
-    );
+    // 2.1 Consulta NASA POWER + Open-Meteo e Avisos Oficiais INMET/Defesa Civil em paralelo
+    const [nasaBrutoBase, alertaOficialInmet] = await Promise.all([
+      buscarDadosNasaParaFrontEnd(fieldReq.centroid.lat, fieldReq.centroid.lng),
+      buscarAlertaOficialInmet(fieldReq.centroid.lat, fieldReq.centroid.lng, fieldReq.regiao.uf),
+    ]);
+    let nasaBruto = nasaBrutoBase;
 
     const simulateRisk = req.body?.simulateRisk;
     if (simulateRisk === 'red') {
       nasaBruto = {
-        historicalRain: nasaBruto.historicalRain,
-        predictedRain: Math.max(lim.chuvaRedMm + 28, Math.round(nasaBruto.historicalRain * 1.9)),
+        ...nasaBrutoBase,
+        predictedRain: Math.max(lim.chuvaRedMm + 28, Math.round(nasaBrutoBase.historicalRain * 1.9)),
         soilMoisture: Math.max(lim.umidadeRedPct + 7, 89),
         windSpeed2m: Number(((lim.ventoDerivaKmh + 14) / 3.6).toFixed(2)),
       };
     } else if (simulateRisk === 'yellow') {
       nasaBruto = {
-        historicalRain: nasaBruto.historicalRain,
-        predictedRain: Math.max(18, Math.min(lim.chuvaRedMm - 6, Math.round(nasaBruto.historicalRain * 1.15))),
+        ...nasaBrutoBase,
+        predictedRain: Math.max(18, Math.min(lim.chuvaRedMm - 6, Math.round(nasaBrutoBase.historicalRain * 1.15))),
         soilMoisture: Math.min(lim.umidadeRedPct - 8, 71),
         windSpeed2m: Number(((lim.ventoDerivaKmh + 3.5) / 3.6).toFixed(2)),
       };
     } else if (simulateRisk === 'green') {
       nasaBruto = {
-        historicalRain: nasaBruto.historicalRain,
+        ...nasaBrutoBase,
         predictedRain: Math.min(16, Math.max(8, lim.chuvaRedMm - 25)),
         soilMoisture: 54,
         windSpeed2m: Number((Math.max(3, lim.ventoDerivaKmh - 4) / 3.6).toFixed(2)),
@@ -1180,23 +1286,32 @@ app.post('/api/analyze-field', async (req, res) => {
     // 4. Salva no PostgreSQL (JSONB) ou memória sem bloquear a resposta ao Front-end
     salvarAnaliseNoBanco(fieldReq, nasaMetrics, resultadoFrontEnd);
 
-    // 5. Se o alerta for crítico ("red"), aciona automaticamente a Mensageria de Contingência 2G (SMS Offline)
+    // 5. Portão de Certeza para SMS 2G: nunca confia só na IA — só dispara se física/INMET confirmarem perigo real
+    const certezaSms = avaliarCertezaAlertaSms(nasaMetrics, fieldReq.regiao, alertaOficialInmet, {
+      isSimulated: simulateRisk === 'red',
+    });
+
     let smsAlert = null;
-    if (resultadoFrontEnd.risk === 'red') {
+    if (resultadoFrontEnd.risk === 'red' && certezaSms.autorizado) {
       try {
         smsAlert = await dispararAlertaSms2G(
           fieldReq,
           nasaMetrics,
           resultadoFrontEnd,
-          req.body?.telefone_produtor
+          req.body?.telefone_produtor,
+          alertaOficialInmet
         );
       } catch {
         // Ignora erro de envio externo
       }
+    } else if (resultadoFrontEnd.risk === 'red' && !certezaSms.autorizado) {
+      console.log(`🛡️ [PORTÃO SMS 2G] ${certezaSms.motivo}`);
     }
 
     return res.status(200).json({
       ...resultadoFrontEnd,
+      alertaDefesaCivil: alertaOficialInmet,
+      smsGate: certezaSms,
       smsAlert,
     });
   } catch (fatalError) {
@@ -1288,10 +1403,17 @@ function auditarSms2GContraFisica(textoIaBruto, fieldReq, nasaMetrics) {
 /**
  * Disparo ativo de SMS quando a análise do talhão retorna "red" (Perigo Severo)
  */
-async function dispararAlertaSms2G(fieldReq, nasaMetrics, resultadoFrontEnd, telefoneDestino) {
+async function dispararAlertaSms2G(
+  fieldReq,
+  nasaMetrics,
+  resultadoFrontEnd,
+  telefoneDestino,
+  alertaOficialInmet = null
+) {
   const fone = telefoneDestino || process.env.FARMER_DEFAULT_PHONE || '+5544999999999';
   const ventoKmh = nasaMetrics.ventoKmh ?? Number((nasaMetrics.windSpeed2m * 3.6).toFixed(1));
-  const textoSms = `AGROSHIELD ALERTA VERMELHO (${fieldReq.crop}): Chuva ${nasaMetrics.predictedRain}mm e vento ${ventoKmh}km/h. ${resultadoFrontEnd.guidance}`.slice(
+  const prefixoDefesa = alertaOficialInmet ? 'INMET+AGROSHIELD' : 'AGROSHIELD';
+  const textoSms = `${prefixoDefesa} ALERTA VERMELHO (${fieldReq.crop}): Chuva ${nasaMetrics.predictedRain}mm, vento ${ventoKmh}km/h. ${resultadoFrontEnd.guidance}`.slice(
     0,
     150
   );
@@ -1531,4 +1653,5 @@ module.exports = {
   escaparXmlTwiml,
   contemNumeroAlucinado,
   calcularTendenciaMarkov,
+  avaliarCertezaAlertaSms,
 };

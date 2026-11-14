@@ -14,6 +14,7 @@ const {
   auditarSms2GContraFisica,
   escaparXmlTwiml,
   calcularTendenciaMarkov,
+  avaliarCertezaAlertaSms,
 } = require('./server');
 
 function isAnalysisFrontEndValidator(v) {
@@ -276,6 +277,34 @@ registrarResultado(
     markovRes.persistenciaRisco7dPct >= 0 &&
     markovRes.persistenciaRisco7dPct <= 100,
   markovRes.resumo
+);
+
+// ----------------------------------------------------------------------------
+// TESTE 15: Portão de Certeza SMS 2G bloqueia disparo se só a IA chutou "red" sem confirmação física/INMET
+// ----------------------------------------------------------------------------
+const gateBloqueado = avaliarCertezaAlertaSms(
+  { predictedRain: 18, soilMoisture: 58, windSpeed2m: 3.1, ventoKmh: 11.2, minPhysicalRisk: 'yellow', nasaLive: true },
+  obterDiretrizRegional(-24.045, -52.383, 'Soja'),
+  null
+);
+registrarResultado(
+  'Teste 15: Portão de Certeza bloqueia SMS se não houver confirmação física severa nem alerta INMET',
+  gateBloqueado.autorizado === false,
+  gateBloqueado.motivo
+);
+
+// ----------------------------------------------------------------------------
+// TESTE 16: Portão de Certeza autoriza SMS quando há confirmação física severa OU INMET Perigo + satélite
+// ----------------------------------------------------------------------------
+const gateAutorizadoInmet = avaliarCertezaAlertaSms(
+  { predictedRain: 28, soilMoisture: 68, windSpeed2m: 3.2, ventoKmh: 11.5, minPhysicalRisk: 'yellow', nasaLive: true },
+  obterDiretrizRegional(-24.045, -52.383, 'Soja'),
+  { severidade: 'Grande Perigo', evento: 'Tempestade Severa', fonte: 'INMET / Defesa Civil' }
+);
+registrarResultado(
+  'Teste 16: Portão de Certeza autoriza SMS com consenso duplo (INMET Grande Perigo + satélite)',
+  gateAutorizadoInmet.autorizado === true,
+  gateAutorizadoInmet.motivo
 );
 
 console.log('\n============================================================================');
