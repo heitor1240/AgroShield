@@ -458,7 +458,84 @@ registrarResultado(
   `Ideal: ${bioIdeal.crencaHmm.regimeDominante} -> ${bioIdeal.politicaOtima.acaoOtima} | Tempestade: ${bioTempestade.crencaHmm.regimeDominante} -> ${bioTempestade.politicaOtima.acaoOtima}`
 );
 
-console.log('\n============================================================================');
-console.log(`📊 RESUMO DA AUDITORIA: ${testesPassados.length} passaram | ${bugsEncontrados.length} bugs encontrados`);
-console.log('============================================================================');
-if (bugsEncontrados.length > 0) process.exit(1);
+// ============================================================================
+// TESTE 23: Cenários ENSO (El Niño / La Niña) modulam chuva/solo por região
+// ============================================================================
+const { aplicarCenarioClimatico } = require('./server');
+const reqElNino = normalizarFieldRequest({
+  crop: 'Soja',
+  climateScenario: 'el-nino-2023-24',
+  centroid: { lat: -24.045, lng: -52.383 },
+});
+const basePr = { predictedRain: 40, soilMoisture: 60, smapRootWetness: 60, soilTempC: 24 };
+const prElNino = aplicarCenarioClimatico(basePr, 'el-nino-2023-24', 'PR');
+const prLaNina = aplicarCenarioClimatico(basePr, 'la-nina-2021-22', 'PR');
+const cerradoElNino = aplicarCenarioClimatico(basePr, 'el-nino-2023-24', 'CERRADO');
+registrarResultado(
+  'Teste 23: Cenário ENSO (El Niño / La Niña) modula chuva e umidade conforme a região',
+  reqElNino.climateScenario === 'el-nino-2023-24' &&
+    prElNino.predictedRain > basePr.predictedRain &&
+    prLaNina.predictedRain < basePr.predictedRain &&
+    cerradoElNino.predictedRain < basePr.predictedRain &&
+    cerradoElNino.soilTempC > basePr.soilTempC,
+  `PR El Niño=${prElNino.predictedRain}mm | PR La Niña=${prLaNina.predictedRain}mm | Cerrado El Niño=${cerradoElNino.predictedRain}mm (${cerradoElNino.soilTempC}°C)`
+);
+
+// ============================================================================
+// TESTE 24: Contrato completo HTTP (analyze-field + sms-responder em servidor efêmero)
+// ============================================================================
+(async () => {
+  const { app } = require('./server');
+  const srv = await new Promise((resolve) => {
+    const s = app.listen(0, () => resolve(s));
+  });
+  try {
+    const port = srv.address().port;
+    const rAnalyze = await fetch(`http://127.0.0.1:${port}/api/analyze-field`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        centroid: { lat: -24.045, lng: -52.383 },
+        crop: 'Soja',
+        currentRotation: 'Soja → Milho Safrinha',
+        climateScenario: 'el-nino-2023-24',
+        plannedOperation: 'Plantar',
+        plannedDate: daqui10dIso,
+        simulateRisk: 'yellow',
+      }),
+    });
+    const jAnalyze = await rAnalyze.json();
+
+    const rSms = await fetch(`http://127.0.0.1:${port}/api/sms-responder?format=json`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        From: '+5544999874707',
+        Body: 'Posso plantar soja hoje?',
+        simular_clima: { historicalRain: 40, predictedRain: 12, soilMoisture: 52, windSpeed2m: 1.8 },
+      }),
+    });
+    const jSms = await rSms.json();
+
+    registrarResultado(
+      'Teste 24: Integração HTTP completa (/api/analyze-field + /api/sms-responder)',
+      rAnalyze.status === 200 &&
+        jAnalyze.climateScenario === 'el-nino-2023-24' &&
+        jAnalyze.operationPlan &&
+        jAnalyze.biophysModel &&
+        Array.isArray(jAnalyze.actions) &&
+        jAnalyze.actions.length === 3 &&
+        rSms.status === 200 &&
+        jSms.caracteres <= 150 &&
+        jSms.twiml.includes('<Response><Message>'),
+      `HTTP analyze=${rAnalyze.status} (${jAnalyze.risk}, plan=${jAnalyze.operationPlan?.veredito}) | SMS=${rSms.status} (${jSms.caracteres} chars)`
+    );
+  } finally {
+    srv.close();
+  }
+
+  console.log('\n============================================================================');
+  console.log(`📊 RESUMO DA AUDITORIA: ${testesPassados.length} passaram | ${bugsEncontrados.length} bugs encontrados`);
+  console.log('============================================================================');
+  if (bugsEncontrados.length > 0) process.exit(1);
+})();

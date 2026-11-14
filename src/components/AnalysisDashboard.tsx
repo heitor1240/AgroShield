@@ -43,7 +43,6 @@ export default function AnalysisDashboard({
   );
   const [smsLoading, setSmsLoading] = useState(false);
   const [smsReply, setSmsReply] = useState<Sms2GResponse | null>(null);
-  const [smsError, setSmsError] = useState("");
   const [showTwiml, setShowTwiml] = useState(false);
   useEffect(() => {
     setAnalysis(initial);
@@ -92,11 +91,8 @@ export default function AnalysisDashboard({
     event.preventDefault();
     if (!smsQuestion.trim()) return;
     setSmsLoading(true);
-    setSmsError("");
     try {
-      setSmsReply(await sendSms2GQuery(smsQuestion, field, backendUrl));
-    } catch {
-      setSmsError("Não foi possível contatar a rota POST /api/sms-responder no back-end.");
+      setSmsReply(await sendSms2GQuery(smsQuestion, field, backendUrl, analysis));
     } finally {
       setSmsLoading(false);
     }
@@ -437,11 +433,6 @@ export default function AnalysisDashboard({
                 </Button>
               </div>
             </form>
-            {smsError && (
-              <p className="fallback-notice" role="alert">
-                {smsError}
-              </p>
-            )}
             {smsReply && (
               <div className="sms-reply-card">
                 <div className="sms-reply-header">

@@ -212,6 +212,11 @@ function normalizarFieldRequest(body = {}) {
   const rawDate = typeof body.plannedDate === 'string' ? body.plannedDate.trim() : '';
   const plannedDate = /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? rawDate : hojeIso;
 
+  const cenariosValidos = ['current', 'el-nino-2023-24', 'la-nina-2021-22'];
+  const climateScenario = cenariosValidos.includes(body.climateScenario)
+    ? body.climateScenario
+    : 'current';
+
   return {
     polygon,
     centroid,
@@ -220,6 +225,7 @@ function normalizarFieldRequest(body = {}) {
     currentRotation,
     plannedOperation,
     plannedDate,
+    climateScenario,
   };
 }
 
@@ -1782,6 +1788,54 @@ function avaliarCertezaAlertaSms(nasaMetrics, regiao, alertaOficialInmet = null,
   };
 }
 
+/**
+ * Modulação hidrológica e térmica determinística para cenários ENSO (El Niño / La Niña)
+ * usada pelo seletor de cenário climático do front-end sem distorcer o clima atual.
+ */
+function aplicarCenarioClimatico(nasaBruto, climateScenario, uf = 'PR') {
+  if (!nasaBruto || !climateScenario || climateScenario === 'current') return nasaBruto;
+  const regiaoSul = ['PR', 'SUL_RS_SC', 'AR_PAMPAS'].includes(uf);
+  const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+
+  if (climateScenario === 'el-nino-2023-24') {
+    const fatorChuva = regiaoSul ? 1.35 : 0.75;
+    const deltaUmid = regiaoSul ? 10 : -8;
+    const deltaTemp = regiaoSul ? 0.5 : 2.8;
+    return {
+      ...nasaBruto,
+      predictedRain: Math.round(Math.max(0, (nasaBruto.predictedRain || 0) * fatorChuva)),
+      soilMoisture: Math.round(clamp((nasaBruto.soilMoisture ?? 50) + deltaUmid, 10, 98)),
+      smapRootWetness: Math.round(
+        clamp((nasaBruto.smapRootWetness ?? nasaBruto.soilMoisture ?? 50) + deltaUmid, 10, 98)
+      ),
+      soilTempC:
+        typeof nasaBruto.soilTempC === 'number'
+          ? Number((nasaBruto.soilTempC + deltaTemp).toFixed(1))
+          : nasaBruto.soilTempC,
+    };
+  }
+
+  if (climateScenario === 'la-nina-2021-22') {
+    const fatorChuva = regiaoSul ? 0.7 : 1.25;
+    const deltaUmid = regiaoSul ? -12 : 8;
+    const deltaTemp = regiaoSul ? 2.4 : -0.5;
+    return {
+      ...nasaBruto,
+      predictedRain: Math.round(Math.max(0, (nasaBruto.predictedRain || 0) * fatorChuva)),
+      soilMoisture: Math.round(clamp((nasaBruto.soilMoisture ?? 50) + deltaUmid, 10, 98)),
+      smapRootWetness: Math.round(
+        clamp((nasaBruto.smapRootWetness ?? nasaBruto.soilMoisture ?? 50) + deltaUmid, 10, 98)
+      ),
+      soilTempC:
+        typeof nasaBruto.soilTempC === 'number'
+          ? Number((nasaBruto.soilTempC + deltaTemp).toFixed(1))
+          : nasaBruto.soilTempC,
+    };
+  }
+
+  return nasaBruto;
+}
+
 // ============================================================================
 // 5.1 ROTA OFICIAL DO FRONT-END: POST /api/analyze-field
 // ============================================================================
@@ -1803,7 +1857,11 @@ app.post('/api/analyze-field', async (req, res) => {
       buscarDadosNasaParaFrontEnd(fieldReq.centroid.lat, fieldReq.centroid.lng),
       buscarAlertaOficialInmet(fieldReq.centroid.lat, fieldReq.centroid.lng, fieldReq.regiao.uf),
     ]);
-    let nasaBruto = nasaBrutoBase;
+    let nasaBruto = aplicarCenarioClimatico(
+      nasaBrutoBase,
+      fieldReq.climateScenario,
+      fieldReq.regiao.uf
+    );
 
     const simulateRisk = req.body?.simulateRisk;
     if (simulateRisk === 'red') {
@@ -1869,6 +1927,7 @@ app.post('/api/analyze-field', async (req, res) => {
 
     return res.status(200).json({
       ...resultadoFrontEnd,
+      climateScenario: fieldReq.climateScenario,
       operationPlan,
       biophysModel,
       alertaDefesaCivil: alertaOficialInmet,
@@ -2219,4 +2278,5 @@ module.exports = {
   processarSoilGrids,
   avaliarOperacaoPlanejada,
   avaliarModeloBiofisicoProbabilistico,
+  aplicarCenarioClimatico,
 };

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { calculateField, INITIAL_CENTER, EXAMPLE_FIELD } from '@/lib/field';
-import { analyzeField, makeDemoAnalysis } from '@/services/agroShieldApi';
+import { analyzeField, makeDemoAnalysis, makeDemoSms2GResponse, sendSms2GQuery } from '@/services/agroShieldApi';
 
 describe('Field selection', () => {
   it('starts in Campo Mourão at the requested coordinates', () => { expect(INITIAL_CENTER).toEqual([-24.045, -52.383]); });
@@ -24,4 +24,16 @@ describe('Analysis contract', () => {
   });
   it('falls back transparently when the backend is unavailable', async () => { const mock = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('offline')); const result = await analyzeField(payload, 'https://example.com'); expect(result.source).toBe('demo'); expect(result.fallbackReason).toBeTruthy(); mock.mockRestore(); });
   it('supports each demonstration risk level', () => { for (const risk of ['green', 'yellow', 'red'] as const) { expect(makeDemoAnalysis(risk).risk).toBe(risk); expect(makeDemoAnalysis(risk).actions).toHaveLength(3); } });
+  it('simulates 2G SMS in the frontend without throwing when offline or without backend', async () => {
+    const mock = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('offline'));
+    const smsOffline = await sendSms2GQuery('Posso plantar soja & milho?', payload, 'http://localhost:3000', makeDemoAnalysis('green'));
+    expect(smsOffline.caracteres).toBeLessThanOrEqual(150);
+    expect(smsOffline.resposta_sms).toContain('SIM');
+    expect(smsOffline.twiml).toContain('<Response><Message>');
+    mock.mockRestore();
+
+    const smsNoUrl = makeDemoSms2GResponse('Posso pulverizar?', payload, makeDemoAnalysis('red'));
+    expect(smsNoUrl.caracteres).toBeLessThanOrEqual(150);
+    expect(smsNoUrl.resposta_sms).toContain('NAO');
+  });
 });
