@@ -95,6 +95,12 @@ export interface FieldAnalysis {
   rootZoneMoisture?: number;
   soilTempC?: number | null;
   soilVolumetricM3?: number | null;
+  ndviPercent?: number;
+  ndviSource?: string;
+  canopyTempC?: number;
+  canopyTempSource?: string;
+  groundCoverPercent?: number;
+  groundCoverSource?: string;
   riskScore?: number;
   windSpeedKmh?: number;
   windLimitKmh?: number;
@@ -167,8 +173,27 @@ export function makeDemoAnalysis(risk: Risk = "red"): FieldAnalysis {
 function isAnalysis(value: unknown): value is FieldAnalysis {
   if (!value || typeof value !== "object") return false;
   const v = value as Record<string, unknown>;
+  const optionalPercentages = ["ndviPercent", "groundCoverPercent"];
+  const validOptionalMeasurements =
+    optionalPercentages.every(
+      (key) =>
+        v[key] === undefined ||
+        (typeof v[key] === "number" &&
+          Number.isFinite(v[key]) &&
+          Number(v[key]) >= 0 &&
+          Number(v[key]) <= 100),
+    ) &&
+    (v["canopyTempC"] === undefined ||
+      (typeof v["canopyTempC"] === "number" &&
+        Number.isFinite(v["canopyTempC"]) &&
+        Number(v["canopyTempC"]) >= -50 &&
+        Number(v["canopyTempC"]) <= 80)) &&
+    ["ndviSource", "canopyTempSource", "groundCoverSource"].every(
+      (key) => v[key] === undefined || (typeof v[key] === "string" && v[key].length <= 120),
+    );
   return (
     ["red", "yellow", "green"].includes(String(v["risk"])) &&
+    validOptionalMeasurements &&
     ["historicalRain", "predictedRain", "soilMoisture"].every(
       (k) => typeof v[k] === "number" && Number.isFinite(v[k]) && Number(v[k]) >= 0,
     ) &&

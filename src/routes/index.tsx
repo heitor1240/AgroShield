@@ -29,6 +29,7 @@ import {
   type Coordinate,
   type Crop,
 } from "@/lib/field";
+import { type FieldMapLayer } from "@/lib/field-layers";
 import {
   analyzeField,
   type ClimateScenario,
@@ -102,9 +103,29 @@ function Index() {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileExpanded, setMobileExpanded] = useState(false);
   const [layoutVersion, setLayoutVersion] = useState(0);
+  const [activeMapLayer, setActiveMapLayer] = useState<FieldMapLayer>("alert");
   const sidebarRef = useRef<HTMLElement>(null);
   const runId = useRef(0);
   const field = calculateField(points);
+  const renderFieldMap = (analysis: FieldAnalysis | null, showSearch: boolean) => (
+    <ClientOnly fallback={<div className="field-map" />}>
+      <Suspense fallback={<div className="field-map" />}>
+        <FieldMap
+          points={points}
+          onPointsChange={setPoints}
+          drawing={drawing}
+          center={center}
+          onCenterChange={setCenter}
+          layoutVersion={layoutVersion}
+          focusBounds={step === 2 || step === 3}
+          field={request}
+          analysis={analysis}
+          activeLayer={activeMapLayer}
+          showSearch={showSearch}
+        />
+      </Suspense>
+    </ClientOnly>
+  );
 
   useEffect(
     () => () => {
@@ -139,6 +160,7 @@ function Index() {
     };
     setRequest(payload);
     setProgress(0);
+    setActiveMapLayer("alert");
     setStep(2);
     const [response] = await Promise.all([
       analyzeField(payload, backendUrl),
@@ -150,7 +172,7 @@ function Index() {
       if (id === runId.current) {
         setResult(response);
         setStep(3);
-        setMobileExpanded(true);
+        setMobileExpanded(false);
       }
     }, 500);
   }
@@ -174,6 +196,7 @@ function Index() {
     setDrawing(false);
     setCenter(INITIAL_CENTER);
     setMobileExpanded(false);
+    setActiveMapLayer("alert");
   }
 
   function saveConnection(event: React.FormEvent) {
@@ -209,19 +232,7 @@ function Index() {
       {step !== 3 && (
         <div className={step === 2 ? "map-under-loading" : undefined}>
           <div className="map-app-map" aria-label="Mapa de satélite interativo">
-            <ClientOnly fallback={<div className="field-map" />}>
-              <Suspense fallback={<div className="field-map" />}>
-                <FieldMap
-                  points={points}
-                  onPointsChange={setPoints}
-                  drawing={drawing}
-                  center={center}
-                  onCenterChange={setCenter}
-                  layoutVersion={layoutVersion}
-                  focusBounds={step === 2}
-                />
-              </Suspense>
-            </ClientOnly>
+            {renderFieldMap(null, true)}
           </div>
         </div>
       )}
@@ -519,7 +530,27 @@ function Index() {
             )}
 
             {step === 3 && result && request && (
-              <AnalysisDashboard field={request} initial={result} backendUrl={backendUrl} />
+              <AnalysisDashboard
+                field={request}
+                initial={result}
+                backendUrl={backendUrl}
+                activeLayer={activeMapLayer}
+                onLayerChange={setActiveMapLayer}
+                mapWindow={
+                  <section className="analysis-map-window" aria-label="Mapa do talhão">
+                    <header className="analysis-map-header">
+                      <div>
+                        <span className="eyebrow">JANELA ESPACIAL</span>
+                        <h2>Mapa de satélite</h2>
+                      </div>
+                      <span>
+                        {formatNumber(request.areaHectares)} ha · {request.crop}
+                      </span>
+                    </header>
+                    <div className="analysis-map-canvas">{renderFieldMap(result, false)}</div>
+                  </section>
+                }
+              />
             )}
             <footer className="sidebar-legal">
               AgroShield © 2026 · Field Shift{" "}
