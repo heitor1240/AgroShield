@@ -35,6 +35,16 @@ export interface MarkovTrend {
   persistenciaRisco7dPct: number;
   resumo: string;
 }
+export interface Ensemble14d {
+  totalMembros: number;
+  chuvaMedianaSemana2Mm: number;
+  consensoChuvaSemana2Pct: number;
+  consensoSecaSemana2Pct: number;
+  tendenciaSemana2: 'CHUVOSA' | 'SECA';
+  confiancaConsensoPct: number;
+  balancoHidrico7dMm: number | null;
+  resumo: string;
+}
 export interface FieldAnalysis {
   risk: Risk;
   historicalRain: number;
@@ -49,6 +59,7 @@ export interface FieldAnalysis {
   manualSource?: string;
   dataSources?: string;
   markov?: MarkovTrend | null;
+  ensemble14d?: Ensemble14d | null;
   smsAlert?: SmsAlertLog | null;
   guidance: string;
   actions: string[];

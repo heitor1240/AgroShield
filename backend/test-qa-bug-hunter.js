@@ -15,6 +15,7 @@ const {
   escaparXmlTwiml,
   calcularTendenciaMarkov,
   avaliarCertezaAlertaSms,
+  processarEnsemble14Dias,
 } = require('./server');
 
 function isAnalysisFrontEndValidator(v) {
@@ -305,6 +306,25 @@ registrarResultado(
   'Teste 16: Portão de Certeza autoriza SMS com consenso duplo (INMET Grande Perigo + satélite)',
   gateAutorizadoInmet.autorizado === true,
   gateAutorizadoInmet.motivo
+);
+
+// ----------------------------------------------------------------------------
+// TESTE 17: Ensemble Forecasting (Dias 8-14) calcula mediana e consenso sem conflitar com hoje
+// ----------------------------------------------------------------------------
+const mockEnsembleDaily = {
+  precipitation_sum: [0, 0, 0, 0, 0, 0, 0, 5, 5, 5, 5, 5, 5, 5],
+  precipitation_sum_member01: [0, 0, 0, 0, 0, 0, 0, 6, 4, 4, 4, 4, 4, 4],
+  precipitation_sum_member02: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0],
+};
+const ensembleRes = processarEnsemble14Dias(mockEnsembleDaily, -12);
+registrarResultado(
+  'Teste 17: Ensemble 14 dias agrega janela Semana 2 (dias 8-14) e calcula consenso percentual',
+  ensembleRes &&
+    ensembleRes.totalMembros === 3 &&
+    ensembleRes.chuvaMedianaSemana2Mm === 30 &&
+    ensembleRes.confiancaConsensoPct === 67 &&
+    ensembleRes.balancoHidrico7dMm === -12,
+  ensembleRes?.resumo || 'Falhou'
 );
 
 console.log('\n============================================================================');

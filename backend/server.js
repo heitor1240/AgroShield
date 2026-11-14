@@ -230,30 +230,93 @@ const cacheDiagnosticoIa = new Map();
  */
 async function buscarOpenMeteoTempoReal(lat, lng) {
   try {
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&daily=precipitation_sum,wind_speed_10m_max&past_days=1&forecast_days=2&timezone=auto`;
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&daily=precipitation_sum,wind_speed_10m_max,et0_fao_evapotranspiration&past_days=1&forecast_days=7&timezone=auto`;
     const res = await axios.get(url, { timeout: 2500 });
     const daily = res?.data?.daily || {};
 
-    const chuvas = (daily.precipitation_sum || []).filter(
+    const chuvasAll = (daily.precipitation_sum || []).filter(
       (v) => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 600
     );
-    const ventos10mKmh = (daily.wind_speed_10m_max || []).filter(
-      (v) => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 200
+    const chuvas24h = chuvasAll.slice(0, 3);
+    const ventos10mKmh = (daily.wind_speed_10m_max || [])
+      .slice(0, 3)
+      .filter((v) => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 200);
+    const et0List = (daily.et0_fao_evapotranspiration || []).filter(
+      (v) => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 30
     );
 
-    if (chuvas.length === 0 && ventos10mKmh.length === 0) return null;
+    if (chuvas24h.length === 0 && ventos10mKmh.length === 0) return null;
 
-    const chuva24hMm = chuvas.length > 0 ? Math.round(Math.max(...chuvas)) : 0;
+    const chuva24hMm = chuvas24h.length > 0 ? Math.round(Math.max(...chuvas24h)) : 0;
     // Conversão padrão FAO-56 de vento a 10m para 2m: u2 = u10 * 0.748 (para comparar com NASA WS2M)
     const maxVento10mKmh = ventos10mKmh.length > 0 ? Math.max(...ventos10mKmh) : 0;
     const vento2mKmh = Number((maxVento10mKmh * 0.748).toFixed(1));
     const vento2mMs = Number((vento2mKmh / 3.6).toFixed(1));
 
+    const chuva7dMm = chuvasAll.reduce((a, b) => a + b, 0);
+    const et07dMm = et0List.reduce((a, b) => a + b, 0);
+    const balancoHidrico7dMm =
+      et0List.length > 0 ? Math.round(chuva7dMm - et07dMm) : null;
+
     return {
       chuva24hMm,
       vento2mKmh,
       vento2mMs,
+      balancoHidrico7dMm,
     };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Processa os 30+ membros do Ensemble (GFS/Open-Meteo) para a janela da 2ª semana (Dias 8 a 14),
+ * calculando mediana, consenso probabilístico e evitando conflito com o alerta imediato (0-48h).
+ */
+function processarEnsemble14Dias(dailyData, balancoHidrico7dMm = null) {
+  if (!dailyData || typeof dailyData !== 'object') return null;
+  const chavesMembros = Object.keys(dailyData).filter(
+    (k) => k === 'precipitation_sum' || k.startsWith('precipitation_sum_member')
+  );
+  if (chavesMembros.length === 0) return null;
+
+  const totaisSemana2 = [];
+  for (const chave of chavesMembros) {
+    const serie = Array.isArray(dailyData[chave]) ? dailyData[chave] : [];
+    // Dias 8 a 14 (índices 7..13) tratados como janela agregada para reduzir erro de fase
+    const semana2 = serie.slice(7, 14).filter((v) => typeof v === 'number' && Number.isFinite(v) && v >= 0);
+    if (semana2.length > 0) {
+      totaisSemana2.push(semana2.reduce((a, b) => a + b, 0));
+    }
+  }
+
+  if (totaisSemana2.length === 0) return null;
+  totaisSemana2.sort((a, b) => a - b);
+  const meio = Math.floor(totaisSemana2.length / 2);
+  const chuvaMedianaSemana2Mm = Math.round(totaisSemana2[meio]);
+  const membrosComChuva = totaisSemana2.filter((mm) => mm >= 20).length;
+  const consensoChuvaSemana2Pct = Math.round((membrosComChuva / totaisSemana2.length) * 100);
+  const consensoSecaSemana2Pct = 100 - consensoChuvaSemana2Pct;
+  const tendenciaSemana2 = consensoChuvaSemana2Pct >= 50 ? 'CHUVOSA' : 'SECA';
+  const confiancaConsensoPct = Math.max(consensoChuvaSemana2Pct, consensoSecaSemana2Pct);
+
+  return {
+    totalMembros: totaisSemana2.length,
+    chuvaMedianaSemana2Mm,
+    consensoChuvaSemana2Pct,
+    consensoSecaSemana2Pct,
+    tendenciaSemana2,
+    confiancaConsensoPct,
+    balancoHidrico7dMm,
+    resumo: `Ensemble (${totaisSemana2.length} membros, dias 8-14): ${confiancaConsensoPct}% de consenso para semana ${tendenciaSemana2.toLowerCase()} (mediana ${chuvaMedianaSemana2Mm}mm).`,
+  };
+}
+
+async function buscarEnsemble14Dias(lat, lng, balancoHidrico7dMm = null) {
+  try {
+    const url = `https://ensemble-api.open-meteo.com/v1/ensemble?latitude=${lat}&longitude=${lng}&daily=precipitation_sum&forecast_days=14&models=gfs_seamless`;
+    const res = await axios.get(url, { timeout: 2500 });
+    return processarEnsemble14Dias(res?.data?.daily, balancoHidrico7dMm);
   } catch {
     return null;
   }
@@ -366,11 +429,18 @@ async function buscarDadosNasaParaFrontEnd(lat, lng) {
     // 2. Daily: Precipitação (PRECTOTCORR), Umidade Superficial do Solo (GWETTOP) e Vento a 2m (WS2M)
     const urlDaily = `https://power.larc.nasa.gov/api/temporal/daily/point?parameters=PRECTOTCORR,GWETTOP,WS2M&community=AG&longitude=${lng}&latitude=${lat}&start=${dataInicio}&end=${dataFim}&format=JSON`;
 
-    const [resClima, resDaily, openMeteo] = await Promise.all([
+    const [resClima, resDaily, openMeteo, ensembleRaw] = await Promise.all([
       axios.get(urlClimatology, { timeout: 3500 }),
       axios.get(urlDaily, { timeout: 3500 }),
       buscarOpenMeteoTempoReal(lat, lng),
+      buscarEnsemble14Dias(lat, lng),
     ]);
+    const ensemble14d = ensembleRaw
+      ? {
+          ...ensembleRaw,
+          balancoHidrico7dMm: openMeteo?.balancoHidrico7dMm ?? ensembleRaw.balancoHidrico7dMm,
+        }
+      : null;
 
     const mesIdx = agora.getMonth();
     const mesNum = mesIdx + 1;
@@ -447,10 +517,11 @@ async function buscarDadosNasaParaFrontEnd(lat, lng) {
       windSpeed2m,
       minPhysicalRisk,
       markov,
+      ensemble14d,
       nasaLive: true,
       openMeteoLive: Boolean(openMeteo),
       dataSources: openMeteo
-        ? 'NASA POWER (Principal) + Open-Meteo (Tempo Real 24h)'
+        ? 'NASA POWER (Principal) + Open-Meteo (Tempo Real + Ensemble)'
         : 'NASA POWER',
     };
     cacheNasaPorCoordenada.set(chaveCoord, resultadoNasa);
@@ -949,6 +1020,7 @@ function auditarEFormatarParaFrontEnd(iaJsonBruto, fieldReq, nasaMetrics) {
     manualSource: regiao.fonte,
     dataSources: nasaMetrics.dataSources || 'NASA POWER',
     markov: nasaMetrics.markov || null,
+    ensemble14d: nasaMetrics.ensemble14d || null,
     guidance,
     actions,
     technicalReason,
@@ -1046,6 +1118,7 @@ O array "actions" DEVE ter exatamente 3 strings.`;
 - Umidade superficial do solo (GWETTOP): ${nasaMetrics.soilMoisture}%
 - Pico de vento a 2m (WS2M): ${ventoKmh} km/h (${nasaMetrics.windSpeed2m} m/s)
 ${nasaMetrics.markov ? `- Tendência Estocástica (Cadeia de Markov): ${nasaMetrics.markov.resumo}` : ''}
+${nasaMetrics.ensemble14d ? `- Horizonte Semana 2 (APENAS referência futura dias 8-14, NÃO altera o alerta de hoje): ${nasaMetrics.ensemble14d.resumo}` : ''}
 
 ⚖️ PISO FÍSICO CALCULADO PELO CÓDIGO: "${nasaMetrics.minPhysicalRisk}"
 
@@ -1654,4 +1727,5 @@ module.exports = {
   contemNumeroAlucinado,
   calcularTendenciaMarkov,
   avaliarCertezaAlertaSms,
+  processarEnsemble14Dias,
 };
