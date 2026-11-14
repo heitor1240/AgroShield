@@ -74,8 +74,9 @@ describe("Analysis contract", () => {
 describe("Orbital field layers", () => {
   it("labels unavailable satellite metrics as illustrative demo values", () => {
     const analysis = makeDemoAnalysis();
-    expect(getFieldLayerView(analysis, "ndvi")).toMatchObject({
-      buttonValue: "84%",
+    expect(getFieldLayerView(analysis, "rain-heatmap")).toMatchObject({
+      buttonLabel: "Mapa de Calor",
+      buttonValue: "112 mm",
       isDemo: true,
     });
     expect(getFieldLayerView(analysis, "soil-moisture")).toMatchObject({
@@ -90,8 +91,10 @@ describe("Orbital field layers", () => {
     const analysis = {
       ...makeDemoAnalysis("green"),
       source: "api" as const,
+      predictedRain: 42,
+      pressureHpa: 1004.5,
+      pressureTrend: "QUEDA_BRUSCA" as const,
       rootZoneMoisture: 73,
-      ndviPercent: 62,
       canopyTempC: 32,
       groundCoverPercent: 66,
     };
@@ -100,7 +103,11 @@ describe("Orbital field layers", () => {
       source: "NASA SMAP · GWETROOT",
       isDemo: false,
     });
-    expect(getFieldLayerView(analysis, "ndvi").buttonValue).toBe("62%");
+    expect(getFieldLayerView(analysis, "rain-heatmap")).toMatchObject({
+      buttonValue: "42 mm",
+      status: "Chuva Forte / Baixa Pressão",
+      isDemo: false,
+    });
     expect(getFieldLayerView(analysis, "heat").buttonValue).toBe("32°C");
     expect(getFieldLayerView(analysis, "cover").buttonValue).toBe("66%");
   });

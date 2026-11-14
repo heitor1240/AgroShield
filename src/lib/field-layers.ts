@@ -1,6 +1,6 @@
 import type { FieldAnalysis, Risk } from "@/services/agroShieldApi";
 
-export type FieldMapLayer = "alert" | "ndvi" | "soil-moisture" | "heat" | "cover";
+export type FieldMapLayer = "alert" | "rain-heatmap" | "soil-moisture" | "heat" | "cover";
 
 export interface FieldLayerView {
   title: string;
@@ -58,27 +58,40 @@ export function getFieldLayerView(analysis: FieldAnalysis, layer: FieldMapLayer)
     };
   }
 
-  if (layer === "ndvi") {
-    const isDemo = analysis.ndviPercent === undefined || analysis.source === "demo";
-    const value = boundedPercent(isDemo ? undefined : analysis.ndviPercent, 84);
-    const status = value >= 70 ? "Saudável" : value >= 45 ? "Atenção" : "Estresse";
-    const highVigor = value >= 70;
+  if (layer === "rain-heatmap") {
+    const isDemo = analysis.source === "demo";
+    const rainMm = Math.max(0, Math.round(analysis.predictedRain));
+    const pressureText =
+      typeof analysis.pressureHpa === "number" ? ` · ${analysis.pressureHpa} hPa` : "";
+    const rainHigh =
+      rainMm >= (analysis.rainLimitMm ?? 50) || analysis.pressureTrend === "QUEDA_BRUSCA";
+    const rainModerate =
+      !rainHigh && (rainMm >= 20 || analysis.pressureTrend === "INSTAVEL");
+    const status = rainHigh
+      ? "Chuva Forte / Baixa Pressão"
+      : rainModerate
+        ? "Instável"
+        : "Estável";
     return {
-      title: "Verde da Plantação",
-      buttonLabel: "Vigor",
-      buttonValue: `${value}%`,
-      markerValue: `🌱 Vigor NDVI: ${value}% (${status})`,
+      title: "Mapa de Calor de Chuva",
+      buttonLabel: "Mapa de Calor",
+      buttonValue: `${rainMm} mm`,
+      markerValue: `🌧️ Chuva: ${rainMm} mm${pressureText} (${status})`,
       status,
       source: isDemo
-        ? "Demonstrativo · NDVI Landsat/MODIS indisponível na API"
-        : analysis.ndviSource || "API · NDVI",
+        ? "Demonstrativo · Precipitação e pressão simuladas"
+        : "NASA POWER + Open-Meteo (Chuva + Pressão hPa)",
       whyItMatters:
-        "O NDVI ajuda a acompanhar o vigor da vegetação e identificar áreas que merecem vistoria.",
-      color: highVigor ? "#15803D" : "#B45309",
-      borderColor: highVigor ? "#166534" : "#92400E",
-      gradientId: highVigor ? "agroshield-ndvi-healthy" : "agroshield-ndvi-stress",
+        "O mapa de calor cruza o volume de chuva prevista com a pressão atmosférica (hPa) para antecipar frentes frias e núcleos de chuva sobre o talhão.",
+      color: rainHigh ? "#1D4ED8" : rainModerate ? "#0284C7" : "#0EA5E9",
+      borderColor: rainHigh ? "#1E3A8A" : rainModerate ? "#0369A1" : "#0284C7",
+      gradientId: rainHigh
+        ? "agroshield-rain-heat-high"
+        : rainModerate
+          ? "agroshield-rain-heat-mid"
+          : "agroshield-rain-heat-low",
       isDemo,
-      critical: false,
+      critical: rainHigh,
     };
   }
 

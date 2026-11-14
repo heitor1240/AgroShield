@@ -95,6 +95,9 @@ export interface FieldAnalysis {
   rootZoneMoisture?: number;
   soilTempC?: number | null;
   soilVolumetricM3?: number | null;
+  pressureHpa?: number | null;
+  pressureDropHpa?: number | null;
+  pressureTrend?: "QUEDA_BRUSCA" | "INSTAVEL" | "ESTAVEL" | string | null;
   ndviPercent?: number;
   ndviSource?: string;
   canopyTempC?: number;

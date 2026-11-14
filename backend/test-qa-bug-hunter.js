@@ -601,6 +601,26 @@ registrarResultado(
     `válida=${okSig} | forjada=${badSig}`
   );
 
+  // ============================================================================
+  // TESTE 28: Pressão Atmosférica (hPa) + Queda Barométrica no Score de Risco
+  // ============================================================================
+  const { calcularPisoFisicoRegional } = require('./server');
+  const limitesPressao = { chuvaRedMm: 50, umidadeRedPct: 82, ventoDerivaKmh: 10, ventoRedKmh: 18 };
+  const baseNasaPressao = { predictedRain: 15, soilMoisture: 55, rootZoneMoisture: 55, windSpeed2m: 2.0 };
+  const pisoEstavel = calcularPisoFisicoRegional(
+    { ...baseNasaPressao, pressureHpa: 1018.0, pressureDropHpa: 0.2, pressureTrend: 'ESTAVEL' },
+    limitesPressao
+  );
+  const pisoQueda = calcularPisoFisicoRegional(
+    { ...baseNasaPressao, pressureHpa: 1004.5, pressureDropHpa: -4.2, pressureTrend: 'QUEDA_BRUSCA' },
+    limitesPressao
+  );
+  registrarResultado(
+    'Teste 28: Queda barométrica (<= 1006 hPa / QUEDA_BRUSCA) eleva riskScore frontal',
+    pisoQueda.riskScore > pisoEstavel.riskScore && pisoQueda.riskScore - pisoEstavel.riskScore === 10,
+    `Estável=${pisoEstavel.riskScore} -> Queda=${pisoQueda.riskScore}`
+  );
+
   console.log('\n============================================================================');
   console.log(`📊 RESUMO DA AUDITORIA: ${testesPassados.length} passaram | ${bugsEncontrados.length} bugs encontrados`);
   console.log('============================================================================');

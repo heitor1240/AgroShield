@@ -254,7 +254,7 @@ const cacheDiagnosticoIa = new Map();
  */
 async function buscarOpenMeteoTempoReal(lat, lng) {
   try {
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&hourly=soil_temperature_0cm,soil_moisture_0_to_1cm,wind_speed_10m,precipitation&daily=precipitation_sum,wind_speed_10m_max,et0_fao_evapotranspiration&past_days=1&forecast_days=7&timezone=auto`;
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&hourly=soil_temperature_0cm,soil_moisture_0_to_1cm,wind_speed_10m,precipitation,pressure_msl&daily=precipitation_sum,wind_speed_10m_max,et0_fao_evapotranspiration&past_days=1&forecast_days=7&timezone=auto`;
     const res = await axios.get(url, { timeout: 2500 });
     const daily = res?.data?.daily || {};
     const hourly = res?.data?.hourly || {};
@@ -293,6 +293,38 @@ async function buscarOpenMeteoTempoReal(lat, lng) {
       tempsSolo.length > 0 ? Number(tempsSolo[tempsSolo.length - 1].toFixed(1)) : null;
     const soilVolumetricM3 =
       umidSoloVol.length > 0 ? Number(umidSoloVol[umidSoloVol.length - 1].toFixed(3)) : null;
+
+    // Pressão atmosférica ao nível do mar (hPa) e queda barométrica nas próximas 24h (índice 24..47)
+    const hPress = Array.isArray(hourly.pressure_msl) ? hourly.pressure_msl : [];
+    const pressoesValidas = hPress.filter(
+      (v) => typeof v === 'number' && Number.isFinite(v) && v >= 850 && v <= 1085
+    );
+    let pressureHpa = null;
+    let pressureDropHpa = null;
+    let pressureTrend = null;
+    if (pressoesValidas.length > 0) {
+      const pAtual =
+        typeof hPress[24] === 'number' && Number.isFinite(hPress[24])
+          ? hPress[24]
+          : pressoesValidas[pressoesValidas.length - 1];
+      pressureHpa = Number(pAtual.toFixed(1));
+      const janela24hPress = hPress
+        .slice(24, 48)
+        .filter((v) => typeof v === 'number' && Number.isFinite(v) && v >= 850 && v <= 1085);
+      if (janela24hPress.length > 0) {
+        const minPress24h = Math.min(...janela24hPress);
+        pressureDropHpa = Number((minPress24h - pAtual).toFixed(1));
+      } else {
+        pressureDropHpa = 0;
+      }
+      if (pressureDropHpa <= -3 || pressureHpa <= 1006) {
+        pressureTrend = 'QUEDA_BRUSCA';
+      } else if (pressureDropHpa <= -1.5 || pressureHpa <= 1011) {
+        pressureTrend = 'INSTAVEL';
+      } else {
+        pressureTrend = 'ESTAVEL';
+      }
+    }
 
     // Janela horária nas próximas 24h (índice 24..47 por causa de past_days=1)
     let janelaHorariaHoje = null;
@@ -351,6 +383,9 @@ async function buscarOpenMeteoTempoReal(lat, lng) {
       balancoHidrico7dMm,
       soilTempC,
       soilVolumetricM3,
+      pressureHpa,
+      pressureDropHpa,
+      pressureTrend,
       janelaHorariaHoje,
       forecastPorData,
     };
@@ -732,6 +767,9 @@ async function buscarDadosNasaParaFrontEnd(lat, lng) {
       rootZoneMoisture,
       soilTempC: openMeteo?.soilTempC ?? null,
       soilVolumetricM3: openMeteo?.soilVolumetricM3 ?? null,
+      pressureHpa: openMeteo?.pressureHpa ?? null,
+      pressureDropHpa: openMeteo?.pressureDropHpa ?? null,
+      pressureTrend: openMeteo?.pressureTrend ?? null,
       soilGrids: soilGrids || null,
       forecastPorData: openMeteo?.forecastPorData || {},
       windSpeed2m,
@@ -1090,7 +1128,26 @@ function calcularPisoFisicoRegional(nasa, limites) {
     }
   }
 
-  let riskScore = Math.min(100, Math.max(0, Math.round(ptsChuva + ptsSolo + ptsVento + ptsTermico)));
+  // 5. Sub-score Pressão Atmosférica / Sistema Frontal (0 a 10 pts)
+  let ptsPressao = 0;
+  if (
+    nasa.pressureTrend === 'QUEDA_BRUSCA' ||
+    (typeof nasa.pressureHpa === 'number' && nasa.pressureHpa <= 1006) ||
+    (typeof nasa.pressureDropHpa === 'number' && nasa.pressureDropHpa <= -3)
+  ) {
+    ptsPressao = 10;
+  } else if (
+    nasa.pressureTrend === 'INSTAVEL' ||
+    (typeof nasa.pressureHpa === 'number' && nasa.pressureHpa <= 1011) ||
+    (typeof nasa.pressureDropHpa === 'number' && nasa.pressureDropHpa <= -1.5)
+  ) {
+    ptsPressao = 5;
+  }
+
+  let riskScore = Math.min(
+    100,
+    Math.max(0, Math.round(ptsChuva + ptsSolo + ptsVento + ptsTermico + ptsPressao))
+  );
 
   let minPhysicalRisk = 'green';
   if (
@@ -1300,6 +1357,9 @@ function auditarEFormatarParaFrontEnd(iaJsonBruto, fieldReq, nasaMetrics) {
     rootZoneMoisture: Number(nasaMetrics.rootZoneMoisture ?? soilMoisture),
     soilTempC: nasaMetrics.soilTempC ?? null,
     soilVolumetricM3: nasaMetrics.soilVolumetricM3 ?? null,
+    pressureHpa: nasaMetrics.pressureHpa ?? null,
+    pressureDropHpa: nasaMetrics.pressureDropHpa ?? null,
+    pressureTrend: nasaMetrics.pressureTrend ?? null,
     soilGrids: nasaMetrics.soilGrids ?? null,
     riskScore: Number(nasaMetrics.riskScore ?? 50),
     windSpeedKmh: Number(ventoKmh),

@@ -4,7 +4,7 @@ import {
   Check,
   ChevronDown,
   ShieldCheck,
-  Sprout,
+  Gauge,
   Satellite,
   CloudRain,
   Droplets,
@@ -96,7 +96,7 @@ export default function AnalysisDashboard({
   ];
   const layerButtons = [
     { id: "alert", Icon: AlertTriangle },
-    { id: "ndvi", Icon: Sprout },
+    { id: "rain-heatmap", Icon: CloudRain },
     { id: "soil-moisture", Icon: Droplets },
     { id: "heat", Icon: Thermometer },
     { id: "cover", Icon: ShieldCheck },
@@ -358,6 +358,24 @@ export default function AnalysisDashboard({
                       {analysis.windSpeedKmh} <small>km/h</small>
                     </strong>
                     <span>Vento 2m (limite {analysis.windLimitKmh ?? 10} km/h)</span>
+                  </div>
+                )}
+                {typeof analysis.pressureHpa === "number" && (
+                  <div>
+                    <Gauge size={18} />
+                    <strong>
+                      {analysis.pressureHpa} <small>hPa</small>
+                    </strong>
+                    <span>
+                      Pressão ({analysis.pressureTrend === "QUEDA_BRUSCA"
+                        ? "Queda brusca · frente"
+                        : analysis.pressureTrend === "INSTAVEL"
+                          ? "Instável"
+                          : "Estável"}
+                      {typeof analysis.pressureDropHpa === "number" && analysis.pressureDropHpa < 0
+                        ? ` · ${analysis.pressureDropHpa} hPa`
+                        : ""})
+                    </span>
                   </div>
                 )}
               </div>

@@ -31,8 +31,9 @@ interface Props {
 }
 
 const gradients: [string, string, string][] = [
-  ["agroshield-ndvi-healthy", "#15803D", "#86EFAC"],
-  ["agroshield-ndvi-stress", "#B45309", "#FDE68A"],
+  ["agroshield-rain-heat-high", "#1E3A8A", "#EF4444"],
+  ["agroshield-rain-heat-mid", "#0284C7", "#38BDF8"],
+  ["agroshield-rain-heat-low", "#0EA5E9", "#BAE6FD"],
   ["agroshield-soil-moisture", "#1D4ED8", "#38BDF8"],
   ["agroshield-heat", "#EA580C", "#FCD34D"],
   ["agroshield-cover-low", "#B45309", "#FBBF24"],
@@ -268,7 +269,9 @@ export default function FieldMap(props: Props) {
           attribution="Tiles © Esri, Maxar, Earthstar Geographics"
         />
         <TileLayer url="https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}" />
-        {radarOn && radarUrl && <TileLayer url={radarUrl} opacity={0.55} />}
+        {(radarOn || props.activeLayer === "rain-heatmap") && radarUrl && (
+          <TileLayer url={radarUrl} opacity={props.activeLayer === "rain-heatmap" ? 0.65 : 0.55} />
+        )}
         {props.points.length >= 3 ? (
           <Polygon ref={polygonRef} positions={props.points} pathOptions={boundaryOptions} />
         ) : (
