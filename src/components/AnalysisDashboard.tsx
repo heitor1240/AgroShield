@@ -8,23 +8,43 @@ import {
   Satellite,
   CloudRain,
   Droplets,
+  Wind,
+  BookOpen,
+  MessageSquare,
+  Send,
+  Radio,
+  LoaderCircle,
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { Button } from "@/components/ui/button";
 import { formatNumber } from "@/lib/field";
-import type { FieldAnalysis, FieldRequest } from "@/services/agroShieldApi";
+import {
+  sendSms2GQuery,
+  type FieldAnalysis,
+  type FieldRequest,
+  type Sms2GResponse,
+} from "@/services/agroShieldApi";
 
 export default function AnalysisDashboard({
   field,
   initial,
+  backendUrl,
 }: {
   field: FieldRequest;
   initial: FieldAnalysis;
+  backendUrl: string;
 }) {
   const [analysis, setAnalysis] = useState(initial);
   const [done, setDone] = useState<number[]>([]);
-  const [technical, setTechnical] = useState(false);
+  const [technical, setTechnical] = useState(true);
   const [activeTab, setActiveTab] = useState<"tactical" | "rotation">("tactical");
+  const [smsQuestion, setSmsQuestion] = useState(
+    `Posso pulverizar ${field.crop} agora neste talhão?`,
+  );
+  const [smsLoading, setSmsLoading] = useState(false);
+  const [smsReply, setSmsReply] = useState<Sms2GResponse | null>(null);
+  const [smsError, setSmsError] = useState("");
+  const [showTwiml, setShowTwiml] = useState(false);
   useEffect(() => {
     setAnalysis(initial);
     setDone([]);
@@ -67,6 +87,21 @@ export default function AnalysisDashboard({
       limit: "A resolução orbital não capta microclimas ou geadas pontuais.",
     },
   ];
+
+  async function handleSendSms2G(event: React.FormEvent) {
+    event.preventDefault();
+    if (!smsQuestion.trim()) return;
+    setSmsLoading(true);
+    setSmsError("");
+    try {
+      setSmsReply(await sendSms2GQuery(smsQuestion, field, backendUrl));
+    } catch {
+      setSmsError("Não foi possível contatar a rota POST /api/sms-responder no back-end.");
+    } finally {
+      setSmsLoading(false);
+    }
+  }
+
   return (
     <div className="dashboard entrance">
       <div className="dashboard-tabs" role="tablist" aria-label="Painéis da análise">
@@ -94,14 +129,19 @@ export default function AnalysisDashboard({
       <div className={`risk-banner risk-${analysis.risk}`}>
         <AlertTriangle size={30} />
         <div>
-          <span className="eyebrow">ALERTA DO TALHÃO</span>
+          <span className="eyebrow">
+            ALERTA DO TALHÃO
+            {typeof analysis.riskScore === "number"
+              ? ` · ÍNDICE DE RISCO ${analysis.riskScore}/100`
+              : ""}
+          </span>
           <h2>{label}</h2>
         </div>
         <span className="risk-source">
           <Satellite size={15} />{" "}
           {analysis.source === "demo"
             ? "Monitoramento simulado • NASA GPM"
-            : "Monitoramento ativo • API conectada"}
+            : `${analysis.dataSources || "NASA POWER"} • ${analysis.manualSource || "IA"}`}
         </span>
       </div>
       <div className="field-summary">
@@ -111,9 +151,17 @@ export default function AnalysisDashboard({
         <span>
           {field.centroid.lat.toFixed(5)}, {field.centroid.lng.toFixed(5)}
         </span>
+        {analysis.manualSource && (
+          <span>
+            <BookOpen size={15} /> Manual Oficial: <strong>{analysis.manualSource}</strong> (
+            {analysis.regionCode || "BR"})
+          </span>
+        )}
         <span>
           Stress test: {climateLabel} ·{" "}
-          {analysis.source === "demo" ? "demonstração, não é previsão real" : "resultado da API"}
+          {analysis.source === "demo"
+            ? "demonstração, não é previsão real"
+            : "diagnóstico do back-end"}
         </span>
       </div>
       {analysis.fallbackReason && (
@@ -128,6 +176,47 @@ export default function AnalysisDashboard({
           role="tabpanel"
           aria-labelledby="tab-tactical"
         >
+          {analysis.operationPlan && (
+            <section
+              className={`operation-plan-card plan-${analysis.operationPlan.veredito.toLowerCase()}`}
+            >
+              <div className="operation-plan-top">
+                <div>
+                  <span className="eyebrow">
+                    PARECER DIRETO DO MANUAL OFICIAL (SEM DEPENDER DA IA)
+                  </span>
+                  <h3>
+                    {analysis.operationPlan.operacao} em {analysis.operationPlan.data}
+                    {analysis.operationPlan.diasAteAcao === 0
+                      ? " (Hoje)"
+                      : ` (daqui a ${analysis.operationPlan.diasAteAcao} dias)`}
+                    {" · "}
+                    {analysis.operationPlan.veredito === "LIBERADA"
+                      ? "LIBERADA"
+                      : analysis.operationPlan.veredito === "ATENCAO"
+                        ? "ATENÇÃO"
+                        : "NÃO RECOMENDADA"}
+                  </h3>
+                </div>
+                <div className="operation-accuracy-badge">
+                  <strong>{analysis.operationPlan.precisaoPrevisaoPct}%</strong>
+                  <span>acerto estimado</span>
+                </div>
+              </div>
+              <p className="operation-plan-rec">{analysis.operationPlan.recomendacao}</p>
+              <div className="operation-plan-meta">
+                <span>
+                  <strong>Solo:</strong> {analysis.operationPlan.soloAnalisado}
+                </span>
+                <span>
+                  <strong>Base da previsão:</strong> {analysis.operationPlan.horizonteDescricao}
+                </span>
+                <span>
+                  <strong>Manual:</strong> {analysis.operationPlan.fonteOficial}
+                </span>
+              </div>
+            </section>
+          )}
           <div className="dashboard-grid">
             <section className="tactical">
               <div className="section-heading">
@@ -177,7 +266,9 @@ export default function AnalysisDashboard({
                   <strong>
                     {analysis.predictedRain} <small>mm</small>
                   </strong>
-                  <span>Chuva no cenário</span>
+                  <span>
+                    Chuva NASA ({analysis.rainLimitMm ? `máx ${analysis.rainLimitMm}mm` : "48h"})
+                  </span>
                 </div>
                 <div>
                   <Droplets size={18} />
@@ -185,15 +276,73 @@ export default function AnalysisDashboard({
                     {analysis.soilMoisture}
                     <small>%</small>
                   </strong>
-                  <span>Umidade estimada</span>
+                  <span>
+                    Solo sup.{" "}
+                    {typeof analysis.rootZoneMoisture === "number"
+                      ? `(Raiz SMAP: ${analysis.rootZoneMoisture}%`
+                      : "(GWETTOP"}
+                    {typeof analysis.soilTempC === "number" ? ` · ${analysis.soilTempC}°C)` : ")"}
+                  </span>
                 </div>
+                {typeof analysis.windSpeedKmh === "number" && (
+                  <div>
+                    <Wind size={18} />
+                    <strong>
+                      {analysis.windSpeedKmh} <small>km/h</small>
+                    </strong>
+                    <span>Vento 2m (limite {analysis.windLimitKmh ?? 10} km/h)</span>
+                  </div>
+                )}
               </div>
+              {analysis.markov && (
+                <div className="markov-strip">
+                  <strong>
+                    Tendência Estocástica (Cadeia de Markov · {analysis.markov.diasAnalisados}d
+                    NASA):
+                  </strong>
+                  <span>
+                    Janela seca em 3 dias: <b>{analysis.markov.janelaSeca3dPct}%</b> · Persistência
+                    de risco em 7 dias: <b>{analysis.markov.persistenciaRisco7dPct}%</b>
+                  </span>
+                </div>
+              )}
+              {analysis.ensemble14d && (
+                <div className="markov-strip">
+                  <strong>
+                    Previsão por Conjunto (Ensemble · {analysis.ensemble14d.totalMembros} cenários,
+                    Dias 8–14):
+                  </strong>
+                  <span>
+                    Consenso de <b>{analysis.ensemble14d.confiancaConsensoPct}%</b> para semana{" "}
+                    <b>{analysis.ensemble14d.tendenciaSemana2.toLowerCase()}</b> (mediana{" "}
+                    {analysis.ensemble14d.chuvaMedianaSemana2Mm} mm
+                    {analysis.ensemble14d.balancoHidrico7dMm !== null
+                      ? ` · Balanço hídrico 7d: ${analysis.ensemble14d.balancoHidrico7dMm >= 0 ? "+" : ""}${analysis.ensemble14d.balancoHidrico7dMm} mm`
+                      : ""}
+                    )
+                  </span>
+                </div>
+              )}
+              {analysis.biophysModel && (
+                <div className="markov-strip">
+                  <strong>
+                    Modelo Biofísico-Probabilístico (POMDP · Crença bₜ &amp; Memória Rₜ):
+                  </strong>
+                  <span>
+                    Regime: <b>{analysis.biophysModel.crencaHmm.regimeDominante}</b> (Ideal{" "}
+                    {analysis.biophysModel.crencaHmm.probabilidadesPct.ideal}% · Sat.{" "}
+                    {analysis.biophysModel.crencaHmm.probabilidadesPct.saturado}%) · INFₜ:{" "}
+                    <b>{analysis.biophysModel.estadoBiofisico.infiltracaoEstimadaMmH} mm/h</b> ·
+                    Ação ótima π*(bₜ): <b>{analysis.biophysModel.politicaOtima.acaoOtima}</b>
+                  </span>
+                </div>
+              )}
               <div className="rain-chart">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart
                     data={[
-                      { name: "Histórico", normal: analysis.historicalRain },
-                      { name: "Cenário NASA", forecast: analysis.predictedRain },
+                      { name: "Histórico NASA", normal: analysis.historicalRain },
+                      { name: "Pico NASA POWER", forecast: analysis.predictedRain },
                     ]}
                     margin={{ top: 12, right: 15, left: -20, bottom: 0 }}
                   >
@@ -220,7 +369,7 @@ export default function AnalysisDashboard({
                     />
                     <Bar
                       dataKey="forecast"
-                      name="Cenário (mm)"
+                      name="Pico NASA (mm)"
                       fill={`var(--${analysis.risk === "red" ? "destructive" : analysis.risk === "yellow" ? "warning" : "safe"})`}
                       radius={[4, 4, 0, 0]}
                       barSize={56}
@@ -234,11 +383,85 @@ export default function AnalysisDashboard({
                 onClick={() => setTechnical(!technical)}
                 aria-expanded={technical}
               >
-                Justificativa técnica <ChevronDown className={technical ? "rotate-180" : ""} />
+                Justificativa técnica ({analysis.manualSource || "EMBRAPA / ZARC"}){" "}
+                <ChevronDown className={technical ? "rotate-180" : ""} />
               </Button>
               {technical && <p className="technical-copy">{analysis.technicalReason}</p>}
             </section>
           </div>
+          <section className="sms-section">
+            <div className="section-heading">
+              <div className="section-icon">
+                <MessageSquare size={21} />
+              </div>
+              <div>
+                <span className="eyebrow">CONTINGÊNCIA OFFLINE 2G • TWILIO WEBHOOK</span>
+                <h2>Comunicação por SMS 2G (Sem Internet no Campo)</h2>
+              </div>
+              <span className="small-badge">
+                <Radio size={12} className="inline mr-1" />
+                POST /api/sms-responder · Máx 150 chars
+              </span>
+            </div>
+            {analysis.smsAlert && (
+              <div className="sms-outbound-alert" role="status">
+                <strong>
+                  Alerta Vermelho 2G Disparado Automaticamente ({analysis.smsAlert.caracteres}/150
+                  chars para {analysis.smsAlert.para}):
+                </strong>
+                <p>"{analysis.smsAlert.mensagem}"</p>
+              </div>
+            )}
+            <form className="sms-simulator-form" onSubmit={handleSendSms2G}>
+              <label htmlFor="sms-input" className="form-label">
+                Simular SMS enviado pelo agricultor do trator (rede 2G GSM)
+                <span>Trava pós-IA e escapamento TwiML ativos</span>
+              </label>
+              <div className="sms-input-row">
+                <input
+                  id="sms-input"
+                  type="text"
+                  className="select-control"
+                  value={smsQuestion}
+                  onChange={(event) => setSmsQuestion(event.target.value)}
+                  placeholder="Ex.: Posso pulverizar a soja agora?"
+                  required
+                />
+                <Button type="submit" disabled={smsLoading}>
+                  {smsLoading ? (
+                    <LoaderCircle size={16} className="animate-spin" />
+                  ) : (
+                    <Send size={15} />
+                  )}
+                  {smsLoading ? "Consultando..." : "Enviar SMS 2G"}
+                </Button>
+              </div>
+            </form>
+            {smsError && (
+              <p className="fallback-notice" role="alert">
+                {smsError}
+              </p>
+            )}
+            {smsReply && (
+              <div className="sms-reply-card">
+                <div className="sms-reply-header">
+                  <span>
+                    <strong>Resposta SMS 2G ({smsReply.caracteres}/150 caracteres)</strong> · Fonte:{" "}
+                    {smsReply.fonte_manual} ({smsReply.regiao})
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setShowTwiml((visible) => !visible)}
+                  >
+                    {showTwiml ? "Ocultar TwiML XML" : "Ver Payload TwiML (Twilio)"}
+                  </Button>
+                </div>
+                <p className="sms-reply-bubble">{smsReply.resposta_sms}</p>
+                {showTwiml && <pre className="sms-twiml-code">{smsReply.twiml}</pre>}
+              </div>
+            )}
+          </section>
         </div>
       )}
       {activeTab === "rotation" && (

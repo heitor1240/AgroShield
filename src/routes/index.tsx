@@ -31,15 +31,16 @@ import {
 } from "@/lib/field";
 import {
   analyzeField,
-  makeDemoAnalysis,
   type ClimateScenario,
   type FieldAnalysis,
   type FieldRequest,
+  type PlannedOperation,
   type Risk,
 } from "@/services/agroShieldApi";
 
 const FieldMap = lazy(() => import("@/components/FieldMap"));
 const rotations = ["Soja → Milho Safrinha", "Monocultura de Soja", "Soja → Trigo"];
+const plannedOperations: PlannedOperation[] = ["Pulverizar", "Plantar", "Adubar", "Colher"];
 const checks = [
   "Extraindo centroide e coordenadas do polígono...",
   "Consultando satélites NASA GPM & POWER (Precipitação e Umidade)...",
@@ -53,6 +54,9 @@ const climateScenarios: { value: ClimateScenario; label: string }[] = [
 ];
 function isClimateScenario(value: string): value is ClimateScenario {
   return climateScenarios.some((scenario) => scenario.value === value);
+}
+function isPlannedOperation(value: string): value is PlannedOperation {
+  return plannedOperations.some((operation) => operation === value);
 }
 
 export const Route = createFileRoute("/")({
@@ -85,6 +89,8 @@ function Index() {
   const [crop, setCrop] = useState<Crop>("Soja");
   const [rotation, setRotation] = useState(rotations[0] ?? "Soja → Milho Safrinha");
   const [climateScenario, setClimateScenario] = useState<ClimateScenario>("current");
+  const [plannedOperation, setPlannedOperation] = useState<PlannedOperation>("Pulverizar");
+  const [plannedDate, setPlannedDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [backendUrl, setBackendUrl] = useState("http://localhost:3000");
   const [urlDraft, setUrlDraft] = useState("http://localhost:3000");
   const [connectionOpen, setConnectionOpen] = useState(false);
@@ -92,6 +98,7 @@ function Index() {
   const [progress, setProgress] = useState(0);
   const [result, setResult] = useState<FieldAnalysis | null>(null);
   const [request, setRequest] = useState<FieldRequest | null>(null);
+  const [simulatingRisk, setSimulatingRisk] = useState<Risk | null>(null);
   const [collapsed, setCollapsed] = useState(false);
   const [mobileExpanded, setMobileExpanded] = useState(false);
   const [layoutVersion, setLayoutVersion] = useState(0);
@@ -127,6 +134,8 @@ function Index() {
       crop,
       currentRotation: rotation,
       climateScenario,
+      plannedOperation,
+      plannedDate,
     };
     setRequest(payload);
     setProgress(0);
@@ -144,6 +153,16 @@ function Index() {
         setMobileExpanded(true);
       }
     }, 500);
+  }
+
+  async function simulateScenario(risk: Risk) {
+    if (!request) return;
+    setSimulatingRisk(risk);
+    try {
+      setResult(await analyzeField({ ...request, simulateRisk: risk }, backendUrl));
+    } finally {
+      setSimulatingRisk(null);
+    }
   }
 
   function reset() {
@@ -369,6 +388,40 @@ function Index() {
                   ))}
                 </select>
 
+                <div className="operation-inputs">
+                  <div className="operation-field">
+                    <label className="form-label" htmlFor="planned-op">
+                      O que vai fazer?
+                    </label>
+                    <select
+                      id="planned-op"
+                      className="select-control"
+                      value={plannedOperation}
+                      onChange={(event) => {
+                        if (isPlannedOperation(event.target.value))
+                          setPlannedOperation(event.target.value);
+                      }}
+                    >
+                      <option value="Pulverizar">Pulverizar</option>
+                      <option value="Plantar">Plantar / Semear</option>
+                      <option value="Adubar">Adubar</option>
+                      <option value="Colher">Colher</option>
+                    </select>
+                  </div>
+                  <div className="operation-field">
+                    <label className="form-label" htmlFor="planned-date">
+                      Data prevista
+                    </label>
+                    <input
+                      id="planned-date"
+                      type="date"
+                      className="select-control"
+                      value={plannedDate}
+                      onChange={(event) => setPlannedDate(event.target.value)}
+                    />
+                  </div>
+                </div>
+
                 <label className="form-label climate-label" htmlFor="climate-scenario">
                   Stress test climático <span>Opcional</span>
                 </label>
@@ -466,7 +519,7 @@ function Index() {
             )}
 
             {step === 3 && result && request && (
-              <AnalysisDashboard field={request} initial={result} />
+              <AnalysisDashboard field={request} initial={result} backendUrl={backendUrl} />
             )}
             <footer className="sidebar-legal">
               AgroShield © 2026 · Field Shift{" "}
@@ -490,10 +543,17 @@ function Index() {
                   variant="outline"
                   size="sm"
                   aria-pressed={result.risk === risk}
-                  onClick={() => setResult(makeDemoAnalysis(risk))}
+                  disabled={simulatingRisk !== null}
+                  onClick={() => void simulateScenario(risk)}
                 >
                   <span className={`scenario-dot risk-${risk}`} />
-                  {risk === "green" ? "Verde" : risk === "yellow" ? "Amarelo" : "Vermelho"}
+                  {simulatingRisk === risk
+                    ? "Calculando..."
+                    : risk === "green"
+                      ? "Verde"
+                      : risk === "yellow"
+                        ? "Amarelo"
+                        : "Vermelho"}
                 </Button>
               ))}
             </div>

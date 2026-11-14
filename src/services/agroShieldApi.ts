@@ -2,6 +2,7 @@ import type { Coordinate, Crop } from "@/lib/field";
 
 export type Risk = "red" | "yellow" | "green";
 export type ClimateScenario = "current" | "el-nino-2023-24" | "la-nina-2021-22";
+export type PlannedOperation = "Pulverizar" | "Plantar" | "Adubar" | "Colher";
 export interface FieldRequest {
   polygon: Coordinate[];
   centroid: { lat: number; lng: number };
@@ -9,12 +10,105 @@ export interface FieldRequest {
   crop: Crop;
   currentRotation: string;
   climateScenario?: ClimateScenario;
+  plannedOperation?: PlannedOperation;
+  plannedDate?: string;
+  simulateRisk?: Risk;
+}
+export interface OperationPlan {
+  operacao: PlannedOperation;
+  data: string;
+  diasAteAcao: number;
+  veredito: "LIBERADA" | "ATENCAO" | "NAO_RECOMENDADA";
+  precisaoPrevisaoPct: number;
+  horizonteDescricao: string;
+  soloAnalisado: string;
+  recomendacao: string;
+  fonteOficial: string;
+}
+export interface BiophysModel {
+  estadoBiofisico: {
+    disponibilidadeHidricaPct: number;
+    infiltracaoEstimadaMmH: number;
+    carbonoOrganicoIdx: number;
+    pressaoFitossanitariaPct: number;
+  };
+  memoriaAgricola: {
+    residuosRres: number;
+    nitrogenioRN: number;
+    carbonoRC: number;
+    raizesRroot: number;
+    patogenosRpath: number;
+    rotacaoDetectada: string;
+  };
+  crencaHmm: {
+    regimeDominante: "SECO_FAVORAVEL" | "EQUILIBRIO_OPERACIONAL" | "SATURADO_ESTRESSE";
+    probabilidadesPct: { seco: number; ideal: number; saturado: number };
+    projecaoSaturacao7dPct: number;
+  };
+  politicaOtima: {
+    acaoOtima: string;
+    recompensaOtima: number;
+    rankingAcoes: Array<{ acao: string; recompensa: number; riscoPct: number; erosaoPct: number }>;
+  };
+}
+export interface SmsAlertLog {
+  tipo: string;
+  para: string;
+  mensagem: string;
+  caracteres: number;
+  timestamp: string;
+}
+export interface Sms2GResponse {
+  tipo: string;
+  de: string;
+  pergunta_agricultor: string;
+  regiao: string;
+  fonte_manual: string;
+  risco_fisico: Risk;
+  resposta_sms: string;
+  caracteres: number;
+  twiml: string;
+  timestamp: string;
+}
+export interface MarkovTrend {
+  estadoAtual: "SECO" | "MODERADO" | "CRITICO";
+  diasAnalisados: number;
+  janelaSeca3dPct: number;
+  persistenciaRisco7dPct: number;
+  resumo: string;
+}
+export interface Ensemble14d {
+  totalMembros: number;
+  chuvaMedianaSemana2Mm: number;
+  consensoChuvaSemana2Pct: number;
+  consensoSecaSemana2Pct: number;
+  tendenciaSemana2: "CHUVOSA" | "SECA";
+  confiancaConsensoPct: number;
+  balancoHidrico7dMm: number | null;
+  resumo: string;
 }
 export interface FieldAnalysis {
   risk: Risk;
   historicalRain: number;
   predictedRain: number;
   soilMoisture: number;
+  rootZoneMoisture?: number;
+  soilTempC?: number | null;
+  soilVolumetricM3?: number | null;
+  riskScore?: number;
+  windSpeedKmh?: number;
+  windLimitKmh?: number;
+  rainLimitMm?: number;
+  regionCode?: string;
+  regionName?: string;
+  soilType?: string;
+  manualSource?: string;
+  dataSources?: string;
+  markov?: MarkovTrend | null;
+  ensemble14d?: Ensemble14d | null;
+  operationPlan?: OperationPlan | null;
+  biophysModel?: BiophysModel | null;
+  smsAlert?: SmsAlertLog | null;
   guidance: string;
   actions: string[];
   technicalReason: string;
@@ -105,9 +199,30 @@ export async function analyzeField(
     return { ...result, source: "api" };
   } catch {
     return {
-      ...makeDemoAnalysis(),
+      ...makeDemoAnalysis(data.simulateRisk ?? "red"),
       fallbackReason:
         "Não foi possível acessar a API. Exibindo um cenário demonstrativo, sem dados ao vivo.",
     };
   }
+}
+
+export async function sendSms2GQuery(
+  mensagem: string,
+  field: FieldRequest,
+  backendUrl = "http://localhost:3000",
+): Promise<Sms2GResponse> {
+  const base = backendUrl.trim().replace(/\/$/, "") || "http://localhost:3000";
+  const response = await fetch(`${base}/api/sms-responder?format=json`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      From: "+5544999999999",
+      Body: mensagem,
+      crop: field.crop,
+      centroid: field.centroid,
+    }),
+    signal: AbortSignal.timeout(20000),
+  });
+  if (!response.ok) throw new Error("Falha ao consultar SMS 2G no back-end");
+  return (await response.json()) as Sms2GResponse;
 }

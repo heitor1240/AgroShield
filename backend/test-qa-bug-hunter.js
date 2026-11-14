@@ -1,0 +1,464 @@
+/**
+ * ============================================================================
+ * 🕵️‍♂️ BATERIA DE AUDITORIA QA & CAÇA-BUGS (AGROSHIELD E2E)
+ * ============================================================================
+ * Testa 10 cenários extremos, malformados e de fronteira geográfica para
+ * encontrar qualquer falha oculta antes da apresentação na banca!
+ */
+
+const {
+  auditarEFormatarParaFrontEnd,
+  normalizarFieldRequest,
+  obterDiretrizRegional,
+  calcularPisoFisicoRegional,
+  auditarSms2GContraFisica,
+  escaparXmlTwiml,
+  calcularTendenciaMarkov,
+  avaliarCertezaAlertaSms,
+  processarEnsemble14Dias,
+  processarSoilGrids,
+  avaliarOperacaoPlanejada,
+} = require('./server');
+
+function isAnalysisFrontEndValidator(v) {
+  if (!v || typeof v !== 'object') return false;
+  return (
+    ['red', 'yellow', 'green'].includes(String(v.risk)) &&
+    ['historicalRain', 'predictedRain', 'soilMoisture'].every(
+      (k) => typeof v[k] === 'number' && Number.isFinite(v[k]) && v[k] >= 0
+    ) &&
+    typeof v.guidance === 'string' &&
+    typeof v.technicalReason === 'string' &&
+    Array.isArray(v.actions) &&
+    v.actions.length === 3 &&
+    v.actions.every((a) => typeof a === 'string')
+  );
+}
+
+const bugsEncontrados = [];
+const testesPassados = [];
+
+function registrarResultado(nomeTeste, passou, detalhe) {
+  if (passou) {
+    testesPassados.push({ nomeTeste, detalhe });
+    console.log(`✅ [PASSOU] ${nomeTeste}: ${detalhe}`);
+  } else {
+    bugsEncontrados.push({ nomeTeste, detalhe });
+    console.log(`❌ [BUG DETECTADO] ${nomeTeste}: ${detalhe}`);
+  }
+}
+
+// ----------------------------------------------------------------------------
+// TESTE 1: Centroide com { lat: null, lng: null } ou strings vazias ""
+// ----------------------------------------------------------------------------
+const reqNullCentroid = normalizarFieldRequest({
+  polygon: [],
+  centroid: { lat: null, lng: '' },
+  areaHectares: null,
+  crop: 'Soja',
+});
+registrarResultado(
+  'Teste 1: Coordenada nula { lat: null, lng: "" } não deve virar (0, 0) no Oceano Atlântico',
+  reqNullCentroid.centroid.lat !== 0 && reqNullCentroid.centroid.lng !== 0,
+  `Centroide resultante: (${reqNullCentroid.centroid.lat}, ${reqNullCentroid.centroid.lng}) — esperado Campo Mourão (-24.045, -52.383)`
+);
+
+// ----------------------------------------------------------------------------
+// TESTE 2: Sobreposição de Bounding Box na América do Sul (Uruguai / Santa Fe - Argentina)
+// ----------------------------------------------------------------------------
+const regiaoRosarioArg = obterDiretrizRegional(-32.94, -60.63, 'Soja'); // Rosário, Argentina
+const regiaoUruguai = obterDiretrizRegional(-32.52, -55.76, 'Soja'); // Centro do Uruguai
+registrarResultado(
+  'Teste 2: Fazenda nos Pampas (Rosário/Argentina e Uruguai) deve usar INTA/INIA e não EMBRAPA Brasil',
+  regiaoRosarioArg.uf === 'AR_PAMPAS' && regiaoUruguai.uf === 'AR_PAMPAS',
+  `Rosário/AR classificado como "${regiaoRosarioArg.uf}" (${regiaoRosarioArg.fonte}) | Uruguai classificado como "${regiaoUruguai.uf}" (${regiaoUruguai.fonte})`
+);
+
+// ----------------------------------------------------------------------------
+// TESTE 3: Sobreposição PR vs SP (Oeste/Sudoeste de São Paulo: Ourinhos/Presidente Prudente)
+// ----------------------------------------------------------------------------
+const regiaoRibeiraoPreto = obterDiretrizRegional(-21.17, -47.81, 'Soja'); // Ribeirão Preto - SP
+registrarResultado(
+  'Teste 3: Sudeste (Ribeirão Preto - SP) não deve cair como Cerrado MT/GO genérico se houver Sudeste',
+  regiaoRibeiraoPreto.uf === 'SUDESTE' || regiaoRibeiraoPreto.uf === 'BR',
+  `Ribeirão Preto/SP classificado como "${regiaoRibeiraoPreto.uf}" (${regiaoRibeiraoPreto.nome})`
+);
+
+// ----------------------------------------------------------------------------
+// TESTE 4: React Duplicate Key em AnalysisDashboard.tsx (actions com textos repetidos)
+// ----------------------------------------------------------------------------
+const reqPadrao = normalizarFieldRequest({});
+const nasaPadrao = {
+  historicalRain: 50,
+  predictedRain: 60,
+  soilMoisture: 85,
+  windSpeed2m: 4.0,
+  minPhysicalRisk: 'red',
+};
+const iaComActionsRepetidas = {
+  risk: 'red',
+  guidance: 'Suspenda as operações imediatamente devido ao excesso de chuva e vento.',
+  actions: ['Ação idêntica repetida', 'Ação idêntica repetida', 'Ação idêntica repetida'],
+  technicalReason: 'EMBRAPA/ZARC: Chuva acima do limite.',
+};
+const resActions = auditarEFormatarParaFrontEnd(iaComActionsRepetidas, reqPadrao, nasaPadrao);
+const actionsUnicas = new Set(resActions.actions).size === 3;
+registrarResultado(
+  'Teste 4: Prevenção de Duplicate Key no React (<label key={action}> no AnalysisDashboard.tsx)',
+  actionsUnicas,
+  `Actions retornadas: ${JSON.stringify(resActions.actions)}`
+);
+
+// ----------------------------------------------------------------------------
+// TESTE 5: IA tentando alucinar "green" num dia de Tempestade Vermelha (45mm + 12 km/h no PR)
+// ----------------------------------------------------------------------------
+const resVeto = auditarEFormatarParaFrontEnd(
+  {
+    risk: 'green',
+    guidance: 'Condições favoráveis, operações liberadas para pulverizar hoje!',
+    actions: ['Pode pulverizar tranquilo', 'Entrar com trator pesado', 'Aplicar adubo'],
+    technicalReason: 'Clima ótimo segundo análise.',
+  },
+  reqPadrao,
+  nasaPadrao
+);
+const vetoFuncionou =
+  resVeto.risk === 'red' &&
+  !resVeto.guidance.toLowerCase().includes('condições favoráveis');
+registrarResultado(
+  'Teste 5: Veto da Trava Pós-IA quando o LLM alucina "green" em dia de tempestade',
+  vetoFuncionou && isAnalysisFrontEndValidator(resVeto),
+  `Risk após veto: "${resVeto.risk}" | Guidance corrigida: "${resVeto.guidance.slice(0, 65)}..."`
+);
+
+// ----------------------------------------------------------------------------
+// TESTE 6: Polígono com coordenadas fora de alcance (Lat > 90 ou Lng > 180)
+// ----------------------------------------------------------------------------
+const reqForaDoGlobo = normalizarFieldRequest({
+  polygon: [
+    [999, 999],
+    [999, 998],
+    [998, 998],
+  ],
+  centroid: { lat: 999, lng: -999 },
+  areaHectares: -50,
+  crop: 'CulturaInexistente',
+});
+const coordsDentroDoGlobo =
+  Math.abs(reqForaDoGlobo.centroid.lat) <= 90 &&
+  Math.abs(reqForaDoGlobo.centroid.lng) <= 180;
+registrarResultado(
+  'Teste 6: Rejeição de coordenadas impossíveis (Lat 999, Lng -999) que quebram a API da NASA',
+  coordsDentroDoGlobo,
+  `Centroide resultante: (${reqForaDoGlobo.centroid.lat}, ${reqForaDoGlobo.centroid.lng})`
+);
+
+// ----------------------------------------------------------------------------
+// TESTE 7: Veto das Actions quando a IA alucina "Pode pulverizar" dentro do checklist em dia de Risco Vermelho
+// ----------------------------------------------------------------------------
+const actionsNaoMandamPulverizarNoPerigo = !resVeto.actions.some((a) =>
+  /pode pulverizar tranquilo|entrar com trator pesado/i.test(a)
+);
+registrarResultado(
+  'Teste 7: Veto de Actions perigosas no checklist quando a IA sofre intervenção de risco',
+  actionsNaoMandamPulverizarNoPerigo,
+  `Actions entregues ao produtor no risco vermelho: ${JSON.stringify(resVeto.actions)}`
+);
+
+// ----------------------------------------------------------------------------
+// TESTE 8: SMS 2G Offline - Veto Pós-IA quando o LLM diz "SIM, pode pulverizar" em dia de Vento/Tempestade
+// ----------------------------------------------------------------------------
+const smsAlucinado = auditarSms2GContraFisica(
+  'AGROSHIELD: SIM, pode pulverizar hoje tranquilo na soja!',
+  reqPadrao,
+  nasaPadrao
+);
+registrarResultado(
+  'Teste 8: SMS 2G Offline - Trava Pós-IA veta falso positivo ("SIM") quando o risco físico é vermelho',
+  smsAlucinado.includes('NAO') && !/\bsim\b/i.test(smsAlucinado),
+  `SMS corrigido pela trava: "${smsAlucinado}" (${smsAlucinado.length} chars)`
+);
+
+// ----------------------------------------------------------------------------
+// TESTE 9: SMS 2G Offline - Limite estrito de <= 150 caracteres para caber em 1 frame GSM 2G
+// ----------------------------------------------------------------------------
+const smsGigante = auditarSms2GContraFisica(
+  'AGROSHIELD: NAO pulverize hoje porque a chuva acumulada da NASA POWER superou todos os limites históricos da EMBRAPA Soja Paraná e o risco de deriva e compactação de latossolo vermelho é altíssimo em Campo Mourão!',
+  reqPadrao,
+  nasaPadrao
+);
+registrarResultado(
+  'Teste 9: SMS 2G Offline - Truncamento seguro em <= 150 caracteres (1 frame GSM 2G)',
+  smsGigante.length <= 150 && smsGigante.startsWith('AGROSHIELD:'),
+  `Tamanho final: ${smsGigante.length} caracteres <= 150 | Texto: "${smsGigante}"`
+);
+
+// ----------------------------------------------------------------------------
+// TESTE 10: SMS 2G Offline - Escapamento XML TwiML contra quebra por "< 10 km/h" ou "&"
+// ----------------------------------------------------------------------------
+const xmlEscapado = escaparXmlTwiml('AGROSHIELD: Vento < 10 km/h & umidade > 80%');
+registrarResultado(
+  'Teste 10: SMS 2G Offline - Proteção TwiML XML contra caracteres "<", ">" e "&" (Erro Twilio 12100)',
+  !xmlEscapado.includes('<') && !xmlEscapado.includes('>') && xmlEscapado.includes('&lt;') && xmlEscapado.includes('&amp;'),
+  `XML escapado: "${xmlEscapado}"`
+);
+
+// ----------------------------------------------------------------------------
+// TESTE 11: Metadados de limites regionais numéricos válidos (sem NaN / undefined)
+// ----------------------------------------------------------------------------
+const limitesValidos =
+  Number.isFinite(resVeto.rainLimitMm) &&
+  resVeto.rainLimitMm > 0 &&
+  Number.isFinite(resVeto.windLimitKmh) &&
+  resVeto.windLimitKmh > 0 &&
+  Number.isFinite(resVeto.windSpeedKmh) &&
+  resVeto.windSpeedKmh >= 0;
+registrarResultado(
+  'Teste 11: Limites regionais e velocidade do vento em km/h são números finitos válidos',
+  limitesValidos,
+  `rainLimitMm=${resVeto.rainLimitMm}, windLimitKmh=${resVeto.windLimitKmh}, windSpeedKmh=${resVeto.windSpeedKmh}`
+);
+
+// ----------------------------------------------------------------------------
+// TESTE 12: Auditor Numérico Anti-Alucinação no Dashboard (LLM inventando "250 mm" ou "95 km/h")
+// ----------------------------------------------------------------------------
+const resAlucinacaoNumerica = auditarEFormatarParaFrontEnd(
+  {
+    risk: 'red',
+    guidance: 'Alerta crítico: chuva inventada de 250 mm e vento falso de 95 km/h na lavoura.',
+    actions: [
+      'Cancelar operação devido à chuva falsa de 250 mm',
+      'Retirar máquinas do talhão',
+      'Monitorar drenagem',
+    ],
+    technicalReason: 'EMBRAPA: Umidade inventada de 12% e chuva de 250 mm.',
+  },
+  reqPadrao,
+  nasaPadrao
+);
+const bloqueouNumerosInventados =
+  !resAlucinacaoNumerica.guidance.includes('250 mm') &&
+  !resAlucinacaoNumerica.guidance.includes('95 km/h') &&
+  !resAlucinacaoNumerica.technicalReason.includes('250 mm') &&
+  !resAlucinacaoNumerica.actions.some((a) => a.includes('250 mm'));
+registrarResultado(
+  'Teste 12: Auditor Numérico bloqueia números inventados pela IA (250 mm / 95 km/h / 12%) no texto e actions',
+  bloqueouNumerosInventados,
+  `Guidance auditada com dados reais (60 mm / 14.4 km/h): "${resAlucinacaoNumerica.guidance.slice(0, 75)}..."`
+);
+
+// ----------------------------------------------------------------------------
+// TESTE 13: Auditor Numérico Anti-Alucinação no SMS 2G Offline
+// ----------------------------------------------------------------------------
+const smsNumeroInventado = auditarSms2GContraFisica(
+  'AGROSHIELD: NAO opere. Chuva de 300 mm e vento de 88 km/h detectados agora.',
+  reqPadrao,
+  nasaPadrao
+);
+registrarResultado(
+  'Teste 13: Auditor Numérico bloqueia números inventados pela IA no SMS 2G Offline',
+  !smsNumeroInventado.includes('300') && !smsNumeroInventado.includes('88'),
+  `SMS corrigido com números reais: "${smsNumeroInventado}"`
+);
+
+// ----------------------------------------------------------------------------
+// TESTE 14: Cadeia de Markov (tendência 3d/7d sobre série diária NASA POWER)
+// ----------------------------------------------------------------------------
+const serieSimulada = { PRECTOTCORR: {}, GWETTOP: {}, WS2M: {} };
+for (let i = 1; i <= 20; i++) {
+  const dia = `202610${String(i).padStart(2, '0')}`;
+  serieSimulada.PRECTOTCORR[dia] = i % 5 === 0 ? 35 : 0;
+  serieSimulada.GWETTOP[dia] = i % 5 === 0 ? 0.85 : 0.45;
+  serieSimulada.WS2M[dia] = 2.0;
+}
+const markovRes = calcularTendenciaMarkov(serieSimulada);
+registrarResultado(
+  'Teste 14: Cadeia de Markov calcula probabilidades válidas (0..100%) sobre série da NASA',
+  markovRes.diasAnalisados === 20 &&
+    markovRes.janelaSeca3dPct >= 0 &&
+    markovRes.janelaSeca3dPct <= 100 &&
+    markovRes.persistenciaRisco7dPct >= 0 &&
+    markovRes.persistenciaRisco7dPct <= 100,
+  markovRes.resumo
+);
+
+// ----------------------------------------------------------------------------
+// TESTE 15: Portão de Certeza SMS 2G bloqueia disparo se só a IA chutou "red" sem confirmação física/INMET
+// ----------------------------------------------------------------------------
+const gateBloqueado = avaliarCertezaAlertaSms(
+  { predictedRain: 18, soilMoisture: 58, windSpeed2m: 3.1, ventoKmh: 11.2, minPhysicalRisk: 'yellow', nasaLive: true },
+  obterDiretrizRegional(-24.045, -52.383, 'Soja'),
+  null
+);
+registrarResultado(
+  'Teste 15: Portão de Certeza bloqueia SMS se não houver confirmação física severa nem alerta INMET',
+  gateBloqueado.autorizado === false,
+  gateBloqueado.motivo
+);
+
+// ----------------------------------------------------------------------------
+// TESTE 16: Portão de Certeza autoriza SMS quando há confirmação física severa OU INMET Perigo + satélite
+// ----------------------------------------------------------------------------
+const gateAutorizadoInmet = avaliarCertezaAlertaSms(
+  { predictedRain: 28, soilMoisture: 68, windSpeed2m: 3.2, ventoKmh: 11.5, minPhysicalRisk: 'yellow', nasaLive: true },
+  obterDiretrizRegional(-24.045, -52.383, 'Soja'),
+  { severidade: 'Grande Perigo', evento: 'Tempestade Severa', fonte: 'INMET / Defesa Civil' }
+);
+registrarResultado(
+  'Teste 16: Portão de Certeza autoriza SMS com consenso duplo (INMET Grande Perigo + satélite)',
+  gateAutorizadoInmet.autorizado === true,
+  gateAutorizadoInmet.motivo
+);
+
+// ----------------------------------------------------------------------------
+// TESTE 17: Ensemble Forecasting (Dias 8-14) calcula mediana e consenso sem conflitar com hoje
+// ----------------------------------------------------------------------------
+const mockEnsembleDaily = {
+  precipitation_sum: [0, 0, 0, 0, 0, 0, 0, 5, 5, 5, 5, 5, 5, 5],
+  precipitation_sum_member01: [0, 0, 0, 0, 0, 0, 0, 6, 4, 4, 4, 4, 4, 4],
+  precipitation_sum_member02: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0],
+};
+const ensembleRes = processarEnsemble14Dias(mockEnsembleDaily, -12);
+registrarResultado(
+  'Teste 17: Ensemble 14 dias agrega janela Semana 2 (dias 8-14) e calcula consenso percentual',
+  ensembleRes &&
+    ensembleRes.totalMembros === 3 &&
+    ensembleRes.chuvaMedianaSemana2Mm === 30 &&
+    ensembleRes.confiancaConsensoPct === 67 &&
+    ensembleRes.balancoHidrico7dMm === -12,
+  ensembleRes?.resumo || 'Falhou'
+);
+
+// ----------------------------------------------------------------------------
+// TESTE 18: Fator SMAP (GWETROOT) + Índice de Risco Composto (0..100)
+// 20mm em solo seco (GWETROOT 35%) != 20mm em solo já saturado (GWETROOT 84%)
+// ----------------------------------------------------------------------------
+const limPrSoja = obterDiretrizRegional(-24.045, -52.383, 'Soja').limites;
+const scoreSoloSeco = calcularPisoFisicoRegional(
+  { predictedRain: 20, soilMoisture: 40, rootZoneMoisture: 35, windSpeed2m: 2.0 },
+  limPrSoja
+);
+const scoreSoloSaturado = calcularPisoFisicoRegional(
+  { predictedRain: 20, soilMoisture: 78, rootZoneMoisture: 84, windSpeed2m: 2.0 },
+  limPrSoja
+);
+registrarResultado(
+  'Teste 18: Fator SMAP (GWETROOT) + Score 0..100 diferencia 20mm em solo seco vs solo saturado',
+  scoreSoloSeco.minPhysicalRisk === 'green' &&
+    scoreSoloSaturado.minPhysicalRisk === 'red' &&
+    scoreSoloSaturado.riskScore > scoreSoloSeco.riskScore + 25,
+  `20mm solo seco: score ${scoreSoloSeco.riskScore}/100 (${scoreSoloSeco.minPhysicalRisk}) | 20mm solo saturado SMAP 84%: score ${scoreSoloSaturado.riskScore}/100 (${scoreSoloSaturado.minPhysicalRisk})`
+);
+
+// ----------------------------------------------------------------------------
+// TESTE 19: Blindagem da API de Solo (ISRIC SoilGrids v2.0) contra HTML/erro e conversão g/kg -> %
+// ----------------------------------------------------------------------------
+const soloHtmlErro = processarSoilGrids('<html><body>502 Bad Gateway</body></html>');
+const soloValido = processarSoilGrids({
+  properties: {
+    layers: [
+      { name: 'clay', depths: [{ values: { mean: 480 } }] },
+      { name: 'sand', depths: [{ values: { mean: 220 } }] },
+      { name: 'phh2o', depths: [{ values: { mean: 56 } }] },
+    ],
+  },
+});
+registrarResultado(
+  'Teste 19: API de Solo (SoilGrids) converte argila/pH com segurança e ignora respostas HTML 502',
+  soloHtmlErro === null &&
+    soloValido !== null &&
+    soloValido.argilaPct === 48 &&
+    soloValido.ph === 5.6 &&
+    soloValido.classeTextural === 'Solo Argiloso',
+  `HTML 502 => null | Válido => ${soloValido?.classeTextural} (${soloValido?.argilaPct}% argila, pH ${soloValido?.ph})`
+);
+
+// ----------------------------------------------------------------------------
+// TESTE 20: Telemetria de Solo (soilTempC, soilVolumetricM3, SoilGrids) pesa no Score de Risco
+// ----------------------------------------------------------------------------
+const scoreSoloBase = calcularPisoFisicoRegional(
+  { predictedRain: 18, soilMoisture: 55, rootZoneMoisture: 55, windSpeed2m: 2.0 },
+  limPrSoja
+);
+const scoreSoloQuenteArgiloso = calcularPisoFisicoRegional(
+  {
+    predictedRain: 18,
+    soilMoisture: 55,
+    rootZoneMoisture: 55,
+    windSpeed2m: 2.0,
+    soilTempC: 37.5,
+    soilVolumetricM3: 0.44,
+    soilGrids: { argilaPct: 48, areiaPct: 22, ph: 5.6, classeTextural: 'Solo Argiloso' },
+  },
+  limPrSoja
+);
+registrarResultado(
+  'Teste 20: Temperatura do solo (>= 35°C), umidade volumétrica e argila pesam no Score e geram alerta térmico',
+  scoreSoloQuenteArgiloso.soilThermalAlert === 'ALTO_VOLATILIZACAO' &&
+    scoreSoloQuenteArgiloso.riskScore >= scoreSoloBase.riskScore + 12,
+  `Base: ${scoreSoloBase.riskScore}/100 | Com solo 37.5°C + 0.44 m³/m³ + 48% argila: ${scoreSoloQuenteArgiloso.riskScore}/100 (${scoreSoloQuenteArgiloso.soilThermalAlert})`
+);
+
+// ----------------------------------------------------------------------------
+// TESTE 21: Planejador Determinístico por Data + Operação + Solo + % de Acerto (Fora de IA)
+// ----------------------------------------------------------------------------
+const regiaoPr = obterDiretrizRegional(-24.045, -52.383, 'Soja');
+const hojeIso = new Date().toISOString().slice(0, 10);
+const daqui10dIso = new Date(Date.now() + 10 * 86400000).toISOString().slice(0, 10);
+const planPlantioHoje = avaliarOperacaoPlanejada(
+  { crop: 'Soja', plannedOperation: 'Plantar', plannedDate: hojeIso },
+  { predictedRain: 20, soilMoisture: 78, rootZoneMoisture: 82, windSpeed2m: 2.0, soilTempC: 24 },
+  regiaoPr
+);
+const planPlantio10d = avaliarOperacaoPlanejada(
+  { crop: 'Soja', plannedOperation: 'Plantar', plannedDate: daqui10dIso },
+  {
+    predictedRain: 10,
+    soilMoisture: 55,
+    rootZoneMoisture: 55,
+    windSpeed2m: 2.0,
+    ensemble14d: { confiancaConsensoPct: 85, chuvaMedianaSemana2Mm: 18, tendenciaSemana2: 'SECA' },
+  },
+  regiaoPr
+);
+registrarResultado(
+  'Teste 21: Planejador por Data/Operação (fora da IA) calcula veredito de solo e % de acerto por horizonte',
+  planPlantioHoje.veredito === 'NAO_RECOMENDADA' &&
+    planPlantioHoje.precisaoPrevisaoPct === 90 &&
+    planPlantio10d.precisaoPrevisaoPct < planPlantioHoje.precisaoPrevisaoPct &&
+    planPlantio10d.fonteOficial.includes('EMBRAPA'),
+  `Hoje: ${planPlantioHoje.veredito} (${planPlantioHoje.precisaoPrevisaoPct}% acerto) | +10d: ${planPlantio10d.veredito} (${planPlantio10d.precisaoPrevisaoPct}% acerto)`
+);
+
+// ============================================================================
+// TESTE 22: Modelo Biofísico-Probabilístico (Rt, Crença HMM bt, POMDP pi*(bt))
+// ============================================================================
+const { avaliarModeloBiofisicoProbabilistico } = require('./server');
+const bioIdeal = avaliarModeloBiofisicoProbabilistico(
+  { crop: 'Soja', currentRotation: 'Soja → Milho Safrinha' },
+  { predictedRain: 8, soilMoisture: 52, smapRootWetness: 54, ventoKmh: 6, soilTempC: 24 },
+  regiaoPr
+);
+const bioTempestade = avaliarModeloBiofisicoProbabilistico(
+  { crop: 'Soja', currentRotation: 'Soja' },
+  { predictedRain: 75, soilMoisture: 88, smapRootWetness: 91, ventoKmh: 22, soilTempC: 27 },
+  regiaoPr
+);
+const somaBtIdeal =
+  bioIdeal.crencaHmm.probabilidadesPct.seco +
+  bioIdeal.crencaHmm.probabilidadesPct.ideal +
+  bioIdeal.crencaHmm.probabilidadesPct.saturado;
+registrarResultado(
+  'Teste 22: Modelo Biofísico-Probabilístico (Rt + Crença HMM bt + POMDP pi*(bt))',
+  somaBtIdeal === 100 &&
+    bioIdeal.memoriaAgricola.residuosRres > bioTempestade.memoriaAgricola.residuosRres &&
+    bioTempestade.memoriaAgricola.patogenosRpath > bioIdeal.memoriaAgricola.patogenosRpath &&
+    bioTempestade.crencaHmm.regimeDominante === 'SATURADO_ESTRESSE' &&
+    bioTempestade.politicaOtima.acaoOtima === 'Aguardar / Manejo Conservacionista',
+  `Ideal: ${bioIdeal.crencaHmm.regimeDominante} -> ${bioIdeal.politicaOtima.acaoOtima} | Tempestade: ${bioTempestade.crencaHmm.regimeDominante} -> ${bioTempestade.politicaOtima.acaoOtima}`
+);
+
+console.log('\n============================================================================');
+console.log(`📊 RESUMO DA AUDITORIA: ${testesPassados.length} passaram | ${bugsEncontrados.length} bugs encontrados`);
+console.log('============================================================================');
+if (bugsEncontrados.length > 0) process.exit(1);
