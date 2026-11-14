@@ -116,6 +116,11 @@ function avaliarOperacaoPlanejada(fieldReq, nasaMetrics, regiao) {
   let recomendacao = '';
 
   if (operacao === 'Pulverizar') {
+    if (diasAteAcao >= 8 && diasAteAcao <= 14) {
+      precisaoPrevisaoPct = Math.min(55, Math.max(45, Math.round(precisaoPrevisaoPct * 0.68)));
+    } else if (diasAteAcao > 14) {
+      precisaoPrevisaoPct = 42;
+    }
     if (diasAteAcao > 7) {
       veredito = nasaMetrics.ensemble14d?.tendenciaSemana2 === 'CHUVOSA' ? 'ATENCAO' : 'LIBERADA';
       recomendacao = `Para pulverizar ${fieldReq.crop} em ${diasAteAcao} dias, a tendência aponta ${nasaMetrics.ensemble14d?.tendenciaSemana2 === 'CHUVOSA' ? 'semana chuvosa' : 'janela mais firme'}, mas vento horário só é confiável a partir de 3–5 dias antes (${regiao.fonte}: limite ${lim.ventoDerivaKmh} km/h).`;
