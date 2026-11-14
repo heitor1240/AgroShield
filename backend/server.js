@@ -426,8 +426,8 @@ async function buscarDadosNasaParaFrontEnd(lat, lng) {
     // 1. Climatology: Média histórica da coordenada (PRECTOTCORR)
     const urlClimatology = `https://power.larc.nasa.gov/api/temporal/climatology/point?parameters=PRECTOTCORR&community=AG&longitude=${lng}&latitude=${lat}&format=JSON`;
 
-    // 2. Daily: Precipitação (PRECTOTCORR), Umidade Superficial do Solo (GWETTOP) e Vento a 2m (WS2M)
-    const urlDaily = `https://power.larc.nasa.gov/api/temporal/daily/point?parameters=PRECTOTCORR,GWETTOP,WS2M&community=AG&longitude=${lng}&latitude=${lat}&start=${dataInicio}&end=${dataFim}&format=JSON`;
+    // 2. Daily: Precipitação (PRECTOTCORR), Umidade Superficial (GWETTOP), Umidade Zona Radicular SMAP (GWETROOT) e Vento a 2m (WS2M)
+    const urlDaily = `https://power.larc.nasa.gov/api/temporal/daily/point?parameters=PRECTOTCORR,GWETTOP,GWETROOT,WS2M&community=AG&longitude=${lng}&latitude=${lat}&start=${dataInicio}&end=${dataFim}&format=JSON`;
 
     const [resClima, resDaily, openMeteo, ensembleRaw] = await Promise.all([
       axios.get(urlClimatology, { timeout: 3500 }),
@@ -468,6 +468,9 @@ async function buscarDadosNasaParaFrontEnd(lat, lng) {
     const umidadesValidas = Object.values(paramDaily.GWETTOP || {})
       .filter((v) => typeof v === 'number' && v >= 0 && v <= 1)
       .slice(-10);
+    const umidadesRaizValidas = Object.values(paramDaily.GWETROOT || {})
+      .filter((v) => typeof v === 'number' && v >= 0 && v <= 1)
+      .slice(-10);
     const ventosValidos = Object.values(paramDaily.WS2M || {})
       .filter((v) => typeof v === 'number' && v >= 0 && v <= 60)
       .slice(-10);
@@ -485,12 +488,18 @@ async function buscarDadosNasaParaFrontEnd(lat, lng) {
       ? Math.round(Math.max(nasaPredictedRain, openMeteo.chuva24hMm))
       : nasaPredictedRain;
 
-    // Umidade do solo (GWETTOP vem de 0.0 a 1.0 na NASA POWER -> convertemos para 0 a 100%)
+    // Umidade superficial (GWETTOP) e umidade da zona radicular SMAP (GWETROOT) -> 0 a 100%
     const ultimaUmidade =
       umidadesValidas.length > 0
         ? umidadesValidas[umidadesValidas.length - 1]
         : Math.min(0.92, 0.45 + predictedRain / 200);
     const soilMoisture = Math.min(99, Math.max(15, Math.round(ultimaUmidade * 100)));
+
+    const ultimaUmidadeRaiz =
+      umidadesRaizValidas.length > 0
+        ? umidadesRaizValidas[umidadesRaizValidas.length - 1]
+        : ultimaUmidade;
+    const rootZoneMoisture = Math.min(99, Math.max(15, Math.round(ultimaUmidadeRaiz * 100)));
 
     const nasaWindSpeed2m =
       ventosValidos.length > 0 ? Number(Math.max(...ventosValidos).toFixed(1)) : 2.8;
@@ -500,12 +509,13 @@ async function buscarDadosNasaParaFrontEnd(lat, lng) {
 
     // Gabarito físico determinístico (Pré-IA alinhado às diretrizes EMBRAPA/ZARC: vento > 2.7 m/s e chuva > 50mm)
     let minPhysicalRisk = 'green';
-    if (predictedRain >= 50 || soilMoisture >= 82 || windSpeed2m >= 5.0) {
+    if (predictedRain >= 50 || soilMoisture >= 82 || rootZoneMoisture >= 84 || windSpeed2m >= 5.0) {
       minPhysicalRisk = 'red';
     } else if (
       windSpeed2m > 2.7 ||
       predictedRain >= 35 ||
-      soilMoisture >= 70
+      soilMoisture >= 70 ||
+      rootZoneMoisture >= 72
     ) {
       minPhysicalRisk = 'yellow';
     }
@@ -514,6 +524,7 @@ async function buscarDadosNasaParaFrontEnd(lat, lng) {
       historicalRain,
       predictedRain,
       soilMoisture,
+      rootZoneMoisture,
       windSpeed2m,
       minPhysicalRisk,
       markov,
@@ -521,8 +532,8 @@ async function buscarDadosNasaParaFrontEnd(lat, lng) {
       nasaLive: true,
       openMeteoLive: Boolean(openMeteo),
       dataSources: openMeteo
-        ? 'NASA POWER (Principal) + Open-Meteo (Tempo Real + Ensemble)'
-        : 'NASA POWER',
+        ? 'NASA POWER + SMAP (GWETROOT) + Open-Meteo'
+        : 'NASA POWER + SMAP (GWETROOT)',
     };
     cacheNasaPorCoordenada.set(chaveCoord, resultadoNasa);
     return resultadoNasa;
@@ -815,24 +826,63 @@ function obterDiretrizRegional(lat, lng, crop) {
   return { uf, nome: regiao.nome, solo: regiao.solo, ...cultura };
 }
 
-// Piso físico calculado pelo CÓDIGO com os limites numéricos do manual da região
+// Algoritmo de Índice de Risco Composto (0 a 100) + Fator SMAP (GWETROOT)
+// Calcula o score matemático antes da IA para que o Claude atue como tradutor pericial do score.
 function calcularPisoFisicoRegional(nasa, limites) {
   const ventoKmh = Number((nasa.windSpeed2m * 3.6).toFixed(1)); // NASA WS2M vem em m/s
+  const rootZoneMoisture = Number.isFinite(nasa.rootZoneMoisture)
+    ? nasa.rootZoneMoisture
+    : nasa.soilMoisture;
+
+  // 1. Sub-score Chuva vs Limite do Manual (0 a 40 pts)
+  // Se o solo SMAP está seco (< 55%) e a chuva não atingiu o patamar de alerta, o solo absorve bem ("chuva é bênção")
+  const fatorSoloSeco =
+    rootZoneMoisture < 55 && nasa.soilMoisture < 55 && nasa.predictedRain < limites.chuvaRedMm * 0.75
+      ? 0.65
+      : 1.0;
+  const ptsChuva = Math.min(
+    40,
+    (nasa.predictedRain / Math.max(1, limites.chuvaRedMm)) * 40 * fatorSoloSeco
+  );
+
+  // 2. Sub-score Saturação SMAP (GWETTOP superficial + GWETROOT zona radicular) (0 a 38 pts)
+  const umidadeMediaSolo = nasa.soilMoisture * 0.45 + rootZoneMoisture * 0.55;
+  let ptsSolo = Math.min(25, (umidadeMediaSolo / Math.max(1, limites.umidadeRedPct)) * 25);
+  // Sinergia física: 20mm em solo seco é bênção, mas >= 15mm em zona radicular já saturada (>= 74%) causa atolamento!
+  if (nasa.predictedRain >= 15 && rootZoneMoisture >= 74) {
+    ptsSolo = Math.min(38, ptsSolo + 14);
+  }
+
+  // 3. Sub-score Vento / Deriva (0 a 25 pts)
+  let ptsVento = Math.min(25, (ventoKmh / Math.max(1, limites.ventoRedKmh)) * 25);
+  if (ventoKmh > limites.ventoDerivaKmh && ptsVento < 15) {
+    ptsVento = 15;
+  }
+
+  let riskScore = Math.min(100, Math.max(0, Math.round(ptsChuva + ptsSolo + ptsVento)));
+
+  let minPhysicalRisk = 'green';
   if (
+    riskScore >= 70 ||
     nasa.predictedRain >= limites.chuvaRedMm ||
     nasa.soilMoisture >= limites.umidadeRedPct ||
+    rootZoneMoisture >= Math.min(92, limites.umidadeRedPct + 4) ||
     ventoKmh >= limites.ventoRedKmh
   ) {
-    return { minPhysicalRisk: 'red', ventoKmh };
-  }
-  if (
+    minPhysicalRisk = 'red';
+    if (riskScore < 72) riskScore = 72;
+  } else if (
+    riskScore >= 45 ||
     ventoKmh > limites.ventoDerivaKmh ||
     nasa.predictedRain >= limites.chuvaRedMm * 0.75 ||
-    nasa.soilMoisture >= limites.umidadeRedPct - 10
+    nasa.soilMoisture >= limites.umidadeRedPct - 10 ||
+    rootZoneMoisture >= limites.umidadeRedPct - 8
   ) {
-    return { minPhysicalRisk: 'yellow', ventoKmh };
+    minPhysicalRisk = 'yellow';
+    if (riskScore < 45) riskScore = 45;
   }
-  return { minPhysicalRisk: 'green', ventoKmh };
+
+  return { minPhysicalRisk, ventoKmh, rootZoneMoisture, riskScore };
 }
 
 const anthropic = new Anthropic({
@@ -866,8 +916,11 @@ function contemNumeroAlucinado(texto, nasaMetrics, limites, ventoKmh) {
   ];
   const pctPermitidos = [
     nasaMetrics.soilMoisture,
+    nasaMetrics.rootZoneMoisture,
+    nasaMetrics.riskScore,
     limites.umidadeRedPct,
     limites.umidadeRedPct - 10,
+    limites.umidadeRedPct - 8,
   ];
 
   const pertoDeAlgum = (val, lista, tol) =>
@@ -1011,6 +1064,8 @@ function auditarEFormatarParaFrontEnd(iaJsonBruto, fieldReq, nasaMetrics) {
     historicalRain: Number(historicalRain),
     predictedRain: Number(predictedRain),
     soilMoisture: Number(soilMoisture),
+    rootZoneMoisture: Number(nasaMetrics.rootZoneMoisture ?? soilMoisture),
+    riskScore: Number(nasaMetrics.riskScore ?? 50),
     windSpeedKmh: Number(ventoKmh),
     windLimitKmh: Number(regiao.limites.ventoDerivaKmh),
     rainLimitMm: Number(regiao.limites.chuvaRedMm),
@@ -1116,11 +1171,13 @@ O array "actions" DEVE ter exatamente 3 strings.`;
 - Média histórica de chuva: ${nasaMetrics.historicalRain} mm
 - Pico de chuva recente (PRECTOTCORR): ${nasaMetrics.predictedRain} mm
 - Umidade superficial do solo (GWETTOP): ${nasaMetrics.soilMoisture}%
+- Umidade na zona das raízes / NASA SMAP (GWETROOT): ${nasaMetrics.rootZoneMoisture ?? nasaMetrics.soilMoisture}%
 - Pico de vento a 2m (WS2M): ${ventoKmh} km/h (${nasaMetrics.windSpeed2m} m/s)
 ${nasaMetrics.markov ? `- Tendência Estocástica (Cadeia de Markov): ${nasaMetrics.markov.resumo}` : ''}
 ${nasaMetrics.ensemble14d ? `- Horizonte Semana 2 (APENAS referência futura dias 8-14, NÃO altera o alerta de hoje): ${nasaMetrics.ensemble14d.resumo}` : ''}
 
-⚖️ PISO FÍSICO CALCULADO PELO CÓDIGO: "${nasaMetrics.minPhysicalRisk}"
+⚖️ ÍNDICE DE RISCO COMPOSTO (CALCULADO PELO NODE.JS): ${nasaMetrics.riskScore ?? 50}/100 → Piso Físico: "${nasaMetrics.minPhysicalRisk}"
+(Atue como tradutor pericial deste Score matemático de 0 a 100 e do fator SMAP GWETROOT.)
 
 📚 MANUAL TÉCNICO REGIONAL (FONTE DE VERDADE - ${regiao.fonte}):
 """

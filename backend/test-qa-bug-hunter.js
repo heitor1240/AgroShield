@@ -327,6 +327,27 @@ registrarResultado(
   ensembleRes?.resumo || 'Falhou'
 );
 
+// ----------------------------------------------------------------------------
+// TESTE 18: Fator SMAP (GWETROOT) + Índice de Risco Composto (0..100)
+// 20mm em solo seco (GWETROOT 35%) != 20mm em solo já saturado (GWETROOT 84%)
+// ----------------------------------------------------------------------------
+const limPrSoja = obterDiretrizRegional(-24.045, -52.383, 'Soja').limites;
+const scoreSoloSeco = calcularPisoFisicoRegional(
+  { predictedRain: 20, soilMoisture: 40, rootZoneMoisture: 35, windSpeed2m: 2.0 },
+  limPrSoja
+);
+const scoreSoloSaturado = calcularPisoFisicoRegional(
+  { predictedRain: 20, soilMoisture: 78, rootZoneMoisture: 84, windSpeed2m: 2.0 },
+  limPrSoja
+);
+registrarResultado(
+  'Teste 18: Fator SMAP (GWETROOT) + Score 0..100 diferencia 20mm em solo seco vs solo saturado',
+  scoreSoloSeco.minPhysicalRisk === 'green' &&
+    scoreSoloSaturado.minPhysicalRisk === 'red' &&
+    scoreSoloSaturado.riskScore > scoreSoloSeco.riskScore + 25,
+  `20mm solo seco: score ${scoreSoloSeco.riskScore}/100 (${scoreSoloSeco.minPhysicalRisk}) | 20mm solo saturado SMAP 84%: score ${scoreSoloSaturado.riskScore}/100 (${scoreSoloSaturado.minPhysicalRisk})`
+);
+
 console.log('\n============================================================================');
 console.log(`📊 RESUMO DA AUDITORIA: ${testesPassados.length} passaram | ${bugsEncontrados.length} bugs encontrados`);
 console.log('============================================================================');

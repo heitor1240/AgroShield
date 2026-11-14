@@ -50,6 +50,8 @@ export interface FieldAnalysis {
   historicalRain: number;
   predictedRain: number;
   soilMoisture: number;
+  rootZoneMoisture?: number;
+  riskScore?: number;
   windSpeedKmh?: number;
   windLimitKmh?: number;
   rainLimitMm?: number;
