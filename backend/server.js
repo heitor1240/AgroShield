@@ -1506,6 +1506,177 @@ function avaliarOperacaoPlanejada(fieldReq, nasaMetrics, regiao) {
   };
 }
 
+/**
+ * Núcleo Biofísico-Probabilístico (POMDP + Memória Agrícola Rt + Crença HMM bt):
+ * - Estado Biofísico Xt: Wt (disponibilidade hídrica), INFt (infiltração), SOCt (carbono), Dt (pressão fitossanitária)
+ * - Memória Agrícola Rt = (Rres, RN, RC, Rroot, Rpath) com decaimento rho_k
+ * - Crença HMM bt = P(St | Y1:t) condicionada ao clima Zt e matriz variante no tempo Pt
+ * - Política Ótima pi*(bt) via recompensa multiobjetivo Rt(s,a)
+ */
+function avaliarModeloBiofisicoProbabilistico(fieldReq, nasaMetrics, regiao) {
+  const clamp01 = (v) => Math.max(0, Math.min(1, Number.isFinite(v) ? v : 0));
+  const round2 = (v) => Number(v.toFixed(2));
+
+  const rotacao = String(fieldReq.currentRotation || `${fieldReq.crop} → Milho Safrinha`);
+  const temGraminea = /\b(milho|trigo|braqui|aveia|sorgo|cana)\b/i.test(rotacao);
+  const temLeguminosa = /\b(soja|feij|amendoim|crotal)\b/i.test(rotacao);
+  const monocultura = !(temGraminea && temLeguminosa) && rotacao.split(/→|->|\/|,/).length < 2;
+
+  // 1. Memória Agrícola Rt com fatores de persistência rho_k (0 <= rho_k <= 1)
+  const rho = { res: 0.72, N: 0.55, C: 0.85, root: 0.65, path: 0.60 };
+  const gRes = temGraminea ? 0.34 : 0.16;
+  const gN = temLeguminosa ? 0.38 : 0.12;
+  const gC = temGraminea ? 0.20 : 0.10;
+  const gRoot = temGraminea && temLeguminosa ? 0.32 : 0.18;
+  const gPath = monocultura ? 0.42 : 0.14;
+
+  const Rt = {
+    residuosRres: round2(clamp01(rho.res * 0.55 + gRes)),
+    nitrogenioRN: round2(clamp01(rho.N * 0.45 + gN)),
+    carbonoRC: round2(clamp01(rho.C * 0.68 + gC)),
+    raizesRroot: round2(clamp01(rho.root * 0.52 + gRoot)),
+    patogenosRpath: round2(clamp01(rho.path * 0.48 + gPath)),
+    rotacaoDetectada: rotacao,
+  };
+
+  // 2. Estado Biofísico Xt
+  const supPct = Number(nasaMetrics.soilMoisture ?? 50);
+  const raizPct = Number(nasaMetrics.smapRootWetness ?? supPct);
+  const argilaPct = Number(nasaMetrics.soilGrids?.argilaPct ?? 35);
+  const tempSolo = Number(nasaMetrics.soilTempC ?? 24);
+  const chuvaMm = Number(nasaMetrics.predictedRain ?? 0);
+  const ventoKmh = Number(nasaMetrics.ventoKmh ?? 0);
+
+  const Wt = round2(clamp01((supPct * 0.4 + raizPct * 0.6) / 100));
+  const infiltracaoEstimadaMmH = Number(
+    Math.max(
+      4,
+      Math.min(
+        48,
+        (1 - argilaPct / 130) * 28 + Rt.residuosRres * 14 + Rt.raizesRroot * 8 - Wt * 12
+      )
+    ).toFixed(1)
+  );
+  const socBase = typeof nasaMetrics.soilGrids?.ph === 'number' ? 0.52 : 0.48;
+  const SOCt = round2(clamp01(socBase * 0.55 + Rt.carbonoRC * 0.45));
+  const fatorTermicoUmido = Wt > 0.65 && tempSolo >= 20 && tempSolo <= 32 ? 0.35 : 0.15;
+  const Dt = round2(clamp01(Rt.patogenosRpath * 0.6 + fatorTermicoUmido));
+
+  const Xt = {
+    disponibilidadeHidricaPct: Math.round(Wt * 100),
+    infiltracaoEstimadaMmH,
+    carbonoOrganicoIdx: SOCt,
+    pressaoFitossanitariaPct: Math.round(Dt * 100),
+  };
+
+  // 3. Regime Oculto (HMM) e Estado de Crença bt = P(St | Y1:t)
+  const riscoChuva = chuvaMm / Math.max(15, regiao?.limites?.chuvaRedMm || 40);
+  const scoreSeco = Math.max(0.05, (1 - Wt) * 1.4 - riscoChuva * 0.5);
+  const scoreSaturado = Math.max(0.05, Wt * 1.35 + riscoChuva * 0.85 - infiltracaoEstimadaMmH / 60);
+  const scoreIdeal = Math.max(0.05, 1.25 - Math.abs(Wt - 0.55) * 2.1 - Math.max(0, riscoChuva - 0.5) * 0.7);
+  const somaB = scoreSeco + scoreIdeal + scoreSaturado;
+
+  const bt = {
+    seco: Math.round((scoreSeco / somaB) * 100),
+    ideal: Math.round((scoreIdeal / somaB) * 100),
+    saturado: 0,
+  };
+  bt.saturado = Math.max(0, 100 - bt.seco - bt.ideal);
+
+  const regimeDominante =
+    bt.saturado >= bt.ideal && bt.saturado >= bt.seco
+      ? 'SATURADO_ESTRESSE'
+      : bt.seco >= bt.ideal
+        ? 'SECO_FAVORAVEL'
+        : 'EQUILIBRIO_OPERACIONAL';
+
+  // Projeção pi_{t+7} via matriz variante no tempo Pt(Zt, Ut, Rt)
+  const pPersistSat = clamp01(0.45 + riscoChuva * 0.35 - Rt.residuosRres * 0.15);
+  const sat7d = Math.round(
+    Math.max(5, Math.min(95, bt.saturado * pPersistSat + bt.ideal * clamp01(riscoChuva * 0.45)))
+  );
+
+  // 4. Otimização Multiobjetivo POMDP: R_t(s,a) = alpha*Pi + beta*dSOC + delta*dAWC - lambda*E - mu*Risk
+  const pesos = { alpha: 0.35, beta: 0.15, delta: 0.15, lambda: 0.18, mu: 0.32 };
+  const limVento = regiao?.limites?.ventoDerivaKmh || 10;
+  const limChuva = regiao?.limites?.chuvaRedMm || 40;
+
+  const candidatas = [
+    {
+      acao: 'Pulverizar',
+      pi: 0.78,
+      dSOC: 0.0,
+      dAWC: 0.0,
+      erosao: clamp01((bt.saturado / 100) * 0.65 * (1 - Rt.residuosRres * 0.4)),
+      risk: clamp01((ventoKmh / limVento) * 0.55 + (chuvaMm / limChuva) * 0.45),
+    },
+    {
+      acao: 'Plantar',
+      pi: 0.85,
+      dSOC: 0.18,
+      dAWC: 0.12,
+      erosao: clamp01((chuvaMm / limChuva) * 0.55 * (1 - Rt.residuosRres * 0.45)),
+      risk: clamp01((bt.saturado / 100) * 0.75 + (chuvaMm / limChuva) * 0.35),
+    },
+    {
+      acao: 'Adubar',
+      pi: 0.74 - Rt.nitrogenioRN * 0.12,
+      dSOC: 0.08,
+      dAWC: 0.04,
+      erosao: clamp01((chuvaMm / limChuva) * 0.6),
+      risk: clamp01((chuvaMm / limChuva) * 0.7 + (bt.saturado / 100) * 0.4),
+    },
+    {
+      acao: 'Colher',
+      pi: 0.90,
+      dSOC: 0.05,
+      dAWC: 0.02,
+      erosao: clamp01((bt.saturado / 100) * 0.7),
+      risk: clamp01((bt.saturado / 100) * 0.8 + (chuvaMm / limChuva) * 0.4),
+    },
+    {
+      acao: 'Aguardar / Manejo Conservacionista',
+      pi: 0.42,
+      dSOC: 0.35,
+      dAWC: 0.28,
+      erosao: 0.05,
+      risk: 0.10,
+    },
+  ];
+
+  const rankingAcoes = candidatas
+    .map((c) => {
+      const recompensa =
+        pesos.alpha * c.pi +
+        pesos.beta * c.dSOC +
+        pesos.delta * c.dAWC -
+        pesos.lambda * c.erosao -
+        pesos.mu * c.risk;
+      return {
+        acao: c.acao,
+        recompensa: Number((recompensa * 100).toFixed(1)),
+        riscoPct: Math.round(c.risk * 100),
+        erosaoPct: Math.round(c.erosao * 100),
+      };
+    })
+    .sort((a, b) => b.recompensa - a.recompensa);
+
+  return {
+    estadoBiofisico: Xt,
+    memoriaAgricola: Rt,
+    crencaHmm: {
+      regimeDominante,
+      probabilidadesPct: bt,
+      projecaoSaturacao7dPct: sat7d,
+    },
+    politicaOtima: {
+      acaoOtima: rankingAcoes[0].acao,
+      recompensaOtima: rankingAcoes[0].recompensa,
+      rankingAcoes: rankingAcoes.slice(0, 3),
+    },
+  };
+}
+
 // ============================================================================
 // 5. PORTÃO DE CERTEZA PARA SMS 2G + ALERTAS OFICIAIS INMET / DEFESA CIVIL
 // ============================================================================
@@ -1669,6 +1840,7 @@ app.post('/api/analyze-field', async (req, res) => {
     // 3. Gera análise com Claude IA + Dupla Trava de Confiabilidade + Plano Determinístico da Operação
     const resultadoFrontEnd = await gerarAnaliseComClaude(fieldReq, nasaMetrics);
     const operationPlan = avaliarOperacaoPlanejada(fieldReq, nasaMetrics, fieldReq.regiao);
+    const biophysModel = avaliarModeloBiofisicoProbabilistico(fieldReq, nasaMetrics, fieldReq.regiao);
 
     // 4. Salva no PostgreSQL (JSONB) ou memória sem bloquear a resposta ao Front-end
     salvarAnaliseNoBanco(fieldReq, nasaMetrics, resultadoFrontEnd);
@@ -1698,6 +1870,7 @@ app.post('/api/analyze-field', async (req, res) => {
     return res.status(200).json({
       ...resultadoFrontEnd,
       operationPlan,
+      biophysModel,
       alertaDefesaCivil: alertaOficialInmet,
       smsGate: certezaSms,
       smsAlert,
@@ -2045,4 +2218,5 @@ module.exports = {
   processarEnsemble14Dias,
   processarSoilGrids,
   avaliarOperacaoPlanejada,
+  avaliarModeloBiofisicoProbabilistico,
 };

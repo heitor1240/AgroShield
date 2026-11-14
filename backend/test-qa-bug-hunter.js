@@ -430,6 +430,34 @@ registrarResultado(
   `Hoje: ${planPlantioHoje.veredito} (${planPlantioHoje.precisaoPrevisaoPct}% acerto) | +10d: ${planPlantio10d.veredito} (${planPlantio10d.precisaoPrevisaoPct}% acerto)`
 );
 
+// ============================================================================
+// TESTE 22: Modelo Biofísico-Probabilístico (Rt, Crença HMM bt, POMDP pi*(bt))
+// ============================================================================
+const { avaliarModeloBiofisicoProbabilistico } = require('./server');
+const bioIdeal = avaliarModeloBiofisicoProbabilistico(
+  { crop: 'Soja', currentRotation: 'Soja → Milho Safrinha' },
+  { predictedRain: 8, soilMoisture: 52, smapRootWetness: 54, ventoKmh: 6, soilTempC: 24 },
+  regiaoPr
+);
+const bioTempestade = avaliarModeloBiofisicoProbabilistico(
+  { crop: 'Soja', currentRotation: 'Soja' },
+  { predictedRain: 75, soilMoisture: 88, smapRootWetness: 91, ventoKmh: 22, soilTempC: 27 },
+  regiaoPr
+);
+const somaBtIdeal =
+  bioIdeal.crencaHmm.probabilidadesPct.seco +
+  bioIdeal.crencaHmm.probabilidadesPct.ideal +
+  bioIdeal.crencaHmm.probabilidadesPct.saturado;
+registrarResultado(
+  'Teste 22: Modelo Biofísico-Probabilístico (Rt + Crença HMM bt + POMDP pi*(bt))',
+  somaBtIdeal === 100 &&
+    bioIdeal.memoriaAgricola.residuosRres > bioTempestade.memoriaAgricola.residuosRres &&
+    bioTempestade.memoriaAgricola.patogenosRpath > bioIdeal.memoriaAgricola.patogenosRpath &&
+    bioTempestade.crencaHmm.regimeDominante === 'SATURADO_ESTRESSE' &&
+    bioTempestade.politicaOtima.acaoOtima === 'Aguardar / Manejo Conservacionista',
+  `Ideal: ${bioIdeal.crencaHmm.regimeDominante} -> ${bioIdeal.politicaOtima.acaoOtima} | Tempestade: ${bioTempestade.crencaHmm.regimeDominante} -> ${bioTempestade.politicaOtima.acaoOtima}`
+);
+
 console.log('\n============================================================================');
 console.log(`📊 RESUMO DA AUDITORIA: ${testesPassados.length} passaram | ${bugsEncontrados.length} bugs encontrados`);
 console.log('============================================================================');

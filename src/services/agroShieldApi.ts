@@ -23,6 +23,32 @@ export interface OperationPlan {
   recomendacao: string;
   fonteOficial: string;
 }
+export interface BiophysModel {
+  estadoBiofisico: {
+    disponibilidadeHidricaPct: number;
+    infiltracaoEstimadaMmH: number;
+    carbonoOrganicoIdx: number;
+    pressaoFitossanitariaPct: number;
+  };
+  memoriaAgricola: {
+    residuosRres: number;
+    nitrogenioRN: number;
+    carbonoRC: number;
+    raizesRroot: number;
+    patogenosRpath: number;
+    rotacaoDetectada: string;
+  };
+  crencaHmm: {
+    regimeDominante: 'SECO_FAVORAVEL' | 'EQUILIBRIO_OPERACIONAL' | 'SATURADO_ESTRESSE';
+    probabilidadesPct: { seco: number; ideal: number; saturado: number };
+    projecaoSaturacao7dPct: number;
+  };
+  politicaOtima: {
+    acaoOtima: string;
+    recompensaOtima: number;
+    rankingAcoes: Array<{ acao: string; recompensa: number; riscoPct: number; erosaoPct: number }>;
+  };
+}
 export interface SmsAlertLog {
   tipo: string;
   para: string;
@@ -79,6 +105,7 @@ export interface FieldAnalysis {
   markov?: MarkovTrend | null;
   ensemble14d?: Ensemble14d | null;
   operationPlan?: OperationPlan | null;
+  biophysModel?: BiophysModel | null;
   smsAlert?: SmsAlertLog | null;
   guidance: string;
   actions: string[];
