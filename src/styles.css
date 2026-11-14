@@ -189,3 +189,16 @@ h1 { font-size: 30px; line-height: 1.3; font-weight: 800; margin: 8px 0; }
 .sms-twiml-code { margin: 10px 0 0; padding: 10px 12px; border-radius: 5px; background: var(--map-ink); color: var(--primary-foreground); font-size: 10px; overflow-x: auto; white-space: pre-wrap; word-break: break-all; }
 .markov-strip { margin-top: 14px; padding: 10px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--secondary); font-size: 11px; line-height: 1.5; display: flex; flex-direction: column; gap: 2px; }
 .markov-strip strong { color: var(--primary); font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px; }
+.operation-inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 16px; }
+.operation-field { display: flex; flex-direction: column; }
+.operation-plan-card { margin-bottom: 22px; padding: 18px 20px; border-radius: 7px; border: 1px solid var(--border); background: var(--card); border-left: 5px solid var(--primary); }
+.operation-plan-card.plan-nao_recomendada { border-left-color: var(--destructive); background: oklch(0.985 0.01 27); }
+.operation-plan-card.plan-atencao { border-left-color: var(--warning); background: oklch(0.985 0.015 70); }
+.operation-plan-card.plan-liberada { border-left-color: var(--safe); background: oklch(0.985 0.015 150); }
+.operation-plan-top { display: flex; justify-content: space-between; align-items: center; gap: 14px; flex-wrap: wrap; }
+.operation-plan-top h3 { font-size: 17px; font-weight: 800; margin: 4px 0 0; }
+.operation-accuracy-badge { display: flex; flex-direction: column; align-items: center; padding: 8px 14px; border-radius: 6px; background: var(--card); border: 1px solid var(--border); min-width: 105px; }
+.operation-accuracy-badge strong { font-size: 22px; font-weight: 800; color: var(--primary); line-height: 1.1; }
+.operation-accuracy-badge span { font-size: 9px; color: var(--muted-foreground); text-transform: uppercase; letter-spacing: 0.4px; }
+.operation-plan-rec { font-size: 13px; font-weight: 600; line-height: 1.6; margin: 12px 0; }
+.operation-plan-meta { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 11px; color: var(--muted-foreground); }

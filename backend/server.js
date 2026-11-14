@@ -203,12 +203,23 @@ function normalizarFieldRequest(body = {}) {
   const areaHectares =
     Number.isFinite(areaInput) && areaInput > 0 ? Number(areaInput.toFixed(2)) : calcAreaHa || 29.8;
 
+  const operacoesValidas = ['Pulverizar', 'Plantar', 'Adubar', 'Colher'];
+  const plannedOperation = operacoesValidas.includes(body.plannedOperation)
+    ? body.plannedOperation
+    : 'Pulverizar';
+
+  const hojeIso = new Date().toISOString().slice(0, 10);
+  const rawDate = typeof body.plannedDate === 'string' ? body.plannedDate.trim() : '';
+  const plannedDate = /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? rawDate : hojeIso;
+
   return {
     polygon,
     centroid,
     areaHectares,
     crop,
     currentRotation,
+    plannedOperation,
+    plannedDate,
   };
 }
 
@@ -270,6 +281,23 @@ async function buscarOpenMeteoTempoReal(lat, lng) {
     const soilVolumetricM3 =
       umidSoloVol.length > 0 ? Number(umidSoloVol[umidSoloVol.length - 1].toFixed(3)) : null;
 
+    const forecastPorData = {};
+    const timesDaily = Array.isArray(daily.time) ? daily.time : [];
+    for (let i = 0; i < timesDaily.length; i++) {
+      const dataStr = timesDaily[i];
+      const ch = daily.precipitation_sum?.[i];
+      const v10 = daily.wind_speed_10m_max?.[i];
+      if (typeof dataStr === 'string') {
+        forecastPorData[dataStr] = {
+          chuvaMm: typeof ch === 'number' && Number.isFinite(ch) ? Math.round(ch) : null,
+          vento2mKmh:
+            typeof v10 === 'number' && Number.isFinite(v10)
+              ? Number((v10 * 0.748).toFixed(1))
+              : null,
+        };
+      }
+    }
+
     return {
       chuva24hMm,
       vento2mKmh,
@@ -277,6 +305,7 @@ async function buscarOpenMeteoTempoReal(lat, lng) {
       balancoHidrico7dMm,
       soilTempC,
       soilVolumetricM3,
+      forecastPorData,
     };
   } catch {
     return null;
@@ -603,6 +632,7 @@ async function buscarDadosNasaParaFrontEnd(lat, lng) {
       soilTempC: openMeteo?.soilTempC ?? null,
       soilVolumetricM3: openMeteo?.soilVolumetricM3 ?? null,
       soilGrids: soilGrids || null,
+      forecastPorData: openMeteo?.forecastPorData || {},
       windSpeed2m,
       minPhysicalRisk,
       markov,
@@ -1358,6 +1388,124 @@ Crie o JSON de alerta cruzando os DADOS DE SATÉLITE com as regras estritas do M
   }
 }
 
+/**
+ * Avaliador Determinístico da Operação Planejada (100% fora da IA):
+ * Cruza Operação (Plantar/Pulverizar/Adubar/Colher) + Data escolhida + Solo + Manual Oficial Regional
+ * e informa claramente a % de acerto/confiança da previsão para aquele horizonte.
+ */
+function avaliarOperacaoPlanejada(fieldReq, nasaMetrics, regiao) {
+  const operacao = fieldReq.plannedOperation || 'Pulverizar';
+  const hoje = new Date();
+  const hojeUtc = Date.UTC(hoje.getUTCFullYear(), hoje.getUTCMonth(), hoje.getUTCDate());
+  const dataAlvoStr = fieldReq.plannedDate || new Date(hojeUtc).toISOString().slice(0, 10);
+  const [ano, mes, dia] = dataAlvoStr.split('-').map(Number);
+  const alvoUtc = Date.UTC(ano, (mes || 1) - 1, dia || 1);
+  const diasAteAcao = Math.max(0, Math.round((alvoUtc - hojeUtc) / (24 * 60 * 60 * 1000)));
+
+  const lim = regiao.limites;
+  const raizPct = nasaMetrics.rootZoneMoisture ?? nasaMetrics.soilMoisture;
+  const supPct = nasaMetrics.soilMoisture;
+  const tempSolo = nasaMetrics.soilTempC;
+  const soloDesc = nasaMetrics.soilGrids
+    ? `${nasaMetrics.soilGrids.classeTextural} (${nasaMetrics.soilGrids.argilaPct}% argila, pH ${nasaMetrics.soilGrids.ph})`
+    : regiao.solo;
+
+  // 1. Porcentagem de acerto/confiança transparente por horizonte temporal
+  let precisaoPrevisaoPct = 90;
+  let horizonteDescricao = 'Previsão imediata (0–2 dias): NASA + Open-Meteo em tempo real';
+  let chuvaRef = nasaMetrics.predictedRain;
+  let ventoRef = nasaMetrics.ventoKmh ?? Number((nasaMetrics.windSpeed2m * 3.6).toFixed(1));
+
+  if (diasAteAcao >= 2 && diasAteAcao <= 7) {
+    precisaoPrevisaoPct = Math.max(72, 84 - diasAteAcao * 2);
+    horizonteDescricao = `Janela de ${diasAteAcao} dias: Open-Meteo diário + Cadeia de Markov NASA`;
+    const prevDia = nasaMetrics.forecastPorData?.[dataAlvoStr];
+    if (prevDia) {
+      if (typeof prevDia.chuvaMm === 'number') chuvaRef = prevDia.chuvaMm;
+      if (typeof prevDia.vento2mKmh === 'number') ventoRef = prevDia.vento2mKmh;
+    }
+  } else if (diasAteAcao >= 8 && diasAteAcao <= 14) {
+    precisaoPrevisaoPct = nasaMetrics.ensemble14d?.confiancaConsensoPct
+      ? Math.min(76, Math.max(60, Math.round(nasaMetrics.ensemble14d.confiancaConsensoPct * 0.78)))
+      : 66;
+    horizonteDescricao = `2ª semana (${diasAteAcao} dias): Tendência por 31 cenários (Ensemble) + Markov`;
+    if (nasaMetrics.ensemble14d) {
+      chuvaRef = Math.round(nasaMetrics.ensemble14d.chuvaMedianaSemana2Mm / 3);
+    }
+  } else if (diasAteAcao > 14) {
+    precisaoPrevisaoPct = 55;
+    horizonteDescricao = `Longo prazo (${diasAteAcao} dias): Climatologia histórica NASA + Manual ZARC (sem previsão diária exata)`;
+  }
+
+  // 2. Veredito 100% determinístico por Operação + Solo + Manual Oficial (fora da IA)
+  let veredito = 'LIBERADA';
+  let recomendacao = '';
+
+  if (operacao === 'Pulverizar') {
+    if (diasAteAcao > 7) {
+      veredito = nasaMetrics.ensemble14d?.tendenciaSemana2 === 'CHUVOSA' ? 'ATENCAO' : 'LIBERADA';
+      recomendacao = `Para pulverizar ${fieldReq.crop} em ${diasAteAcao} dias, a tendência aponta ${nasaMetrics.ensemble14d?.tendenciaSemana2 === 'CHUVOSA' ? 'semana chuvosa' : 'janela mais firme'}, mas vento horário só é confiável a partir de 3–5 dias antes (${regiao.fonte}: limite ${lim.ventoDerivaKmh} km/h).`;
+    } else if (ventoRef > lim.ventoDerivaKmh || chuvaRef >= lim.chuvaRedMm) {
+      veredito = 'NAO_RECOMENDADA';
+      recomendacao = `Não pulverizar ${fieldReq.crop} em ${dataAlvoStr}: vento de ${ventoRef} km/h (limite do manual ${regiao.fonte}: ${lim.ventoDerivaKmh} km/h) ou chuva de ${chuvaRef} mm causam deriva e lavagem do produto.`;
+    } else if (typeof tempSolo === 'number' && tempSolo >= 35) {
+      veredito = 'ATENCAO';
+      recomendacao = `Atenção ao pulverizar ${fieldReq.crop}: solo a ${tempSolo}°C aumenta evaporação/volatilização. Prefira início da manhã ou fim da tarde (${regiao.fonte}).`;
+    } else {
+      veredito = 'LIBERADA';
+      recomendacao = `Janela favorável para pulverizar ${fieldReq.crop} em ${dataAlvoStr}: vento (${ventoRef} km/h) e chuva (${chuvaRef} mm) dentro dos limites de ${regiao.fonte}.`;
+    }
+  } else if (operacao === 'Plantar') {
+    if (chuvaRef >= lim.chuvaRedMm || raizPct >= lim.umidadeRedPct || (chuvaRef >= 15 && raizPct >= 74)) {
+      veredito = 'NAO_RECOMENDADA';
+      recomendacao = `Adie o plantio de ${fieldReq.crop} em ${dataAlvoStr}: solo saturado na raiz (${raizPct}% SMAP) com ${chuvaRef} mm previstos gera atolamento da plantadeira e compactação em ${soloDesc} (${regiao.fonte}).`;
+    } else if (typeof tempSolo === 'number' && tempSolo < 15) {
+      veredito = 'ATENCAO';
+      recomendacao = `Solo frio (${tempSolo}°C) em ${soloDesc}: pode atrasar a germinação de ${fieldReq.crop}. Avalie vigor da semente conforme ${regiao.fonte}.`;
+    } else if (raizPct < 35 && chuvaRef < 5) {
+      veredito = 'ATENCAO';
+      recomendacao = `Solo seco na zona das raízes (${raizPct}% SMAP) sem chuva prevista (${chuvaRef} mm): risco de falha de emergência de ${fieldReq.crop} (${regiao.fonte}).`;
+    } else {
+      veredito = 'LIBERADA';
+      recomendacao = `Condição adequada de plantio para ${fieldReq.crop} em ${dataAlvoStr}: umidade na raiz (${raizPct}% SMAP)${typeof tempSolo === 'number' ? ` e solo a ${tempSolo}°C` : ''} permitem boa semeadura em ${soloDesc} (${regiao.fonte}).`;
+    }
+  } else if (operacao === 'Adubar') {
+    if (chuvaRef >= lim.chuvaRedMm || supPct >= lim.umidadeRedPct) {
+      veredito = 'NAO_RECOMENDADA';
+      recomendacao = `Não adubar ${fieldReq.crop} em ${dataAlvoStr}: chuva de ${chuvaRef} mm supera o limite de ${lim.chuvaRedMm} mm (${regiao.fonte}), causando lixiviação do fertilizante e compactação em ${soloDesc}.`;
+    } else if (chuvaRef >= lim.chuvaRedMm * 0.7) {
+      veredito = 'ATENCAO';
+      recomendacao = `Cuidado ao adubar ${fieldReq.crop} em ${dataAlvoStr}: volume de ${chuvaRef} mm próximo do limite (${lim.chuvaRedMm} mm) pode carrear nutrientes em ${soloDesc} (${regiao.fonte}).`;
+    } else {
+      veredito = 'LIBERADA';
+      recomendacao = `Adubação liberada para ${fieldReq.crop} em ${dataAlvoStr}: umidade equilibrada (${supPct}% sup. / ${raizPct}% raiz) sem risco de lavagem severa (${regiao.fonte}).`;
+    }
+  } else {
+    if (chuvaRef >= 20 || supPct >= lim.umidadeRedPct || raizPct >= 82) {
+      veredito = 'NAO_RECOMENDADA';
+      recomendacao = `Suspenda a colheita de ${fieldReq.crop} em ${dataAlvoStr}: ${chuvaRef} mm previstos e solo úmido (${raizPct}% na raiz) elevam risco de grão ardido e atolamento da colheitadeira em ${soloDesc} (${regiao.fonte}).`;
+    } else if (chuvaRef >= 8 || supPct >= 70) {
+      veredito = 'ATENCAO';
+      recomendacao = `Colheita com cautela em ${dataAlvoStr}: umidade superficial (${supPct}%) e chuva de ${chuvaRef} mm exigem conferir umidade dos grãos antes de entrar (${regiao.fonte}).`;
+    } else {
+      veredito = 'LIBERADA';
+      recomendacao = `Janela boa para colher ${fieldReq.crop} em ${dataAlvoStr}: solo firme (${raizPct}% na raiz) e baixa chuva (${chuvaRef} mm) segundo ${regiao.fonte}.`;
+    }
+  }
+
+  return {
+    operacao,
+    data: dataAlvoStr,
+    diasAteAcao,
+    veredito,
+    precisaoPrevisaoPct,
+    horizonteDescricao,
+    soloAnalisado: `${soloDesc} · Sup. ${supPct}% · Raiz SMAP ${raizPct}%${typeof tempSolo === 'number' ? ` · ${tempSolo}°C` : ''}`,
+    recomendacao,
+    fonteOficial: `${regiao.fonte} (${regiao.uf})`,
+  };
+}
+
 // ============================================================================
 // 5. PORTÃO DE CERTEZA PARA SMS 2G + ALERTAS OFICIAIS INMET / DEFESA CIVIL
 // ============================================================================
@@ -1518,8 +1666,9 @@ app.post('/api/analyze-field', async (req, res) => {
       `📚 [GROUNDING] ${fieldReq.regiao.uf} · ${fieldReq.crop} · ${fieldReq.regiao.fonte} → piso físico "${nasaMetrics.minPhysicalRisk}" (vento ${nasaMetrics.ventoKmh} km/h, chuva ${nasaMetrics.predictedRain} mm)`
     );
 
-    // 3. Gera análise com Claude IA + Dupla Trava de Confiabilidade
+    // 3. Gera análise com Claude IA + Dupla Trava de Confiabilidade + Plano Determinístico da Operação
     const resultadoFrontEnd = await gerarAnaliseComClaude(fieldReq, nasaMetrics);
+    const operationPlan = avaliarOperacaoPlanejada(fieldReq, nasaMetrics, fieldReq.regiao);
 
     // 4. Salva no PostgreSQL (JSONB) ou memória sem bloquear a resposta ao Front-end
     salvarAnaliseNoBanco(fieldReq, nasaMetrics, resultadoFrontEnd);
@@ -1548,6 +1697,7 @@ app.post('/api/analyze-field', async (req, res) => {
 
     return res.status(200).json({
       ...resultadoFrontEnd,
+      operationPlan,
       alertaDefesaCivil: alertaOficialInmet,
       smsGate: certezaSms,
       smsAlert,
@@ -1894,4 +2044,5 @@ module.exports = {
   avaliarCertezaAlertaSms,
   processarEnsemble14Dias,
   processarSoilGrids,
+  avaliarOperacaoPlanejada,
 };

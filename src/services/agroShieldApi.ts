@@ -1,13 +1,27 @@
 import type { Coordinate, Crop } from '@/lib/field';
 
 export type Risk = 'red' | 'yellow' | 'green';
+export type PlannedOperation = 'Pulverizar' | 'Plantar' | 'Adubar' | 'Colher';
 export interface FieldRequest {
   polygon: Coordinate[];
   centroid: { lat: number; lng: number };
   areaHectares: number;
   crop: Crop;
   currentRotation: string;
+  plannedOperation?: PlannedOperation;
+  plannedDate?: string;
   simulateRisk?: Risk;
+}
+export interface OperationPlan {
+  operacao: PlannedOperation;
+  data: string;
+  diasAteAcao: number;
+  veredito: 'LIBERADA' | 'ATENCAO' | 'NAO_RECOMENDADA';
+  precisaoPrevisaoPct: number;
+  horizonteDescricao: string;
+  soloAnalisado: string;
+  recomendacao: string;
+  fonteOficial: string;
 }
 export interface SmsAlertLog {
   tipo: string;
@@ -64,6 +78,7 @@ export interface FieldAnalysis {
   dataSources?: string;
   markov?: MarkovTrend | null;
   ensemble14d?: Ensemble14d | null;
+  operationPlan?: OperationPlan | null;
   smsAlert?: SmsAlertLog | null;
   guidance: string;
   actions: string[];

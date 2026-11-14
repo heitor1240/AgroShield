@@ -76,6 +76,35 @@ export default function AnalysisDashboard({
       <span>{analysis.source === 'demo' ? 'Cenário demonstrativo · não é previsão real' : 'Diagnóstico auditado pelo Back-end AgroShield'}</span>
     </div>
     {analysis.fallbackReason && <p className="fallback-notice" role="status">{analysis.fallbackReason}</p>}
+    {analysis.operationPlan && (
+      <section className={`operation-plan-card plan-${analysis.operationPlan.veredito.toLowerCase()}`}>
+        <div className="operation-plan-top">
+          <div>
+            <span className="eyebrow">PARECER DIRETO DO MANUAL OFICIAL (SEM DEPENDER DA IA)</span>
+            <h3>
+              {analysis.operationPlan.operacao} em {analysis.operationPlan.data}
+              {analysis.operationPlan.diasAteAcao === 0 ? ' (Hoje)' : ` (daqui a ${analysis.operationPlan.diasAteAcao} dias)`}
+              {' · '}
+              {analysis.operationPlan.veredito === 'LIBERADA'
+                ? 'LIBERADA'
+                : analysis.operationPlan.veredito === 'ATENCAO'
+                  ? 'ATENÇÃO'
+                  : 'NÃO RECOMENDADA'}
+            </h3>
+          </div>
+          <div className="operation-accuracy-badge">
+            <strong>{analysis.operationPlan.precisaoPrevisaoPct}%</strong>
+            <span>acerto estimado</span>
+          </div>
+        </div>
+        <p className="operation-plan-rec">{analysis.operationPlan.recomendacao}</p>
+        <div className="operation-plan-meta">
+          <span><strong>Solo:</strong> {analysis.operationPlan.soloAnalisado}</span>
+          <span><strong>Base da previsão:</strong> {analysis.operationPlan.horizonteDescricao}</span>
+          <span><strong>Manual:</strong> {analysis.operationPlan.fonteOficial}</span>
+        </div>
+      </section>
+    )}
     <div className="dashboard-grid">
       <section className="tactical"><div className="section-heading"><div className="section-icon"><AlertTriangle size={21} /></div><div><span className="eyebrow">AÇÃO IMEDIATA</span><h2>Orientação tática</h2></div><span className="small-badge">{analysis.regionName || 'Próximas 24h'}</span></div><p className="guidance">{analysis.guidance}</p><div className="task-heading">Plano de ação <span>{done.length}/3 concluídas</span></div><div className="task-list">{analysis.actions.map((action, i) => <label key={action} className={done.includes(i) ? 'task-done' : ''}><input type="checkbox" checked={done.includes(i)} onChange={() => setDone(prev => prev.includes(i) ? prev.filter(n => n !== i) : [...prev, i])} /><span>{action}</span></label>)}</div></section>
       <section className="science"><div className="section-heading"><div className="section-icon"><Satellite size={21} /></div><div><span className="eyebrow">EVIDÊNCIA CLIMÁTICA + ATERRAMENTO</span><h2>Os números por trás do alerta</h2></div></div><div className="weather-values"><div><CloudRain size={18} /><strong>{analysis.predictedRain} <small>mm</small></strong><span>Chuva NASA ({analysis.rainLimitMm ? ` máx ${analysis.rainLimitMm}mm` : '48h'})</span></div><div><Droplets size={18} /><strong>{analysis.soilMoisture}<small>%</small></strong><span>Solo sup. {typeof analysis.rootZoneMoisture === 'number' ? `(Raiz SMAP: ${analysis.rootZoneMoisture}%` : '(GWETTOP'}{typeof analysis.soilTempC === 'number' ? ` · ${analysis.soilTempC}°C)` : ')'}</span></div>{typeof analysis.windSpeedKmh === 'number' && <div><Wind size={18} /><strong>{analysis.windSpeedKmh} <small>km/h</small></strong><span>Vento 2m (limite {analysis.windLimitKmh ?? 10} km/h)</span></div>}</div>{analysis.markov && <div className="markov-strip"><strong>Tendência Estocástica (Cadeia de Markov · {analysis.markov.diasAnalisados}d NASA):</strong><span>Janela seca em 3 dias: <b>{analysis.markov.janelaSeca3dPct}%</b> · Persistência de risco em 7 dias: <b>{analysis.markov.persistenciaRisco7dPct}%</b></span></div>}

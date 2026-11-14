@@ -17,6 +17,7 @@ const {
   avaliarCertezaAlertaSms,
   processarEnsemble14Dias,
   processarSoilGrids,
+  avaliarOperacaoPlanejada,
 } = require('./server');
 
 function isAnalysisFrontEndValidator(v) {
@@ -396,6 +397,37 @@ registrarResultado(
   scoreSoloQuenteArgiloso.soilThermalAlert === 'ALTO_VOLATILIZACAO' &&
     scoreSoloQuenteArgiloso.riskScore >= scoreSoloBase.riskScore + 12,
   `Base: ${scoreSoloBase.riskScore}/100 | Com solo 37.5°C + 0.44 m³/m³ + 48% argila: ${scoreSoloQuenteArgiloso.riskScore}/100 (${scoreSoloQuenteArgiloso.soilThermalAlert})`
+);
+
+// ----------------------------------------------------------------------------
+// TESTE 21: Planejador Determinístico por Data + Operação + Solo + % de Acerto (Fora de IA)
+// ----------------------------------------------------------------------------
+const regiaoPr = obterDiretrizRegional(-24.045, -52.383, 'Soja');
+const hojeIso = new Date().toISOString().slice(0, 10);
+const daqui10dIso = new Date(Date.now() + 10 * 86400000).toISOString().slice(0, 10);
+const planPlantioHoje = avaliarOperacaoPlanejada(
+  { crop: 'Soja', plannedOperation: 'Plantar', plannedDate: hojeIso },
+  { predictedRain: 20, soilMoisture: 78, rootZoneMoisture: 82, windSpeed2m: 2.0, soilTempC: 24 },
+  regiaoPr
+);
+const planPlantio10d = avaliarOperacaoPlanejada(
+  { crop: 'Soja', plannedOperation: 'Plantar', plannedDate: daqui10dIso },
+  {
+    predictedRain: 10,
+    soilMoisture: 55,
+    rootZoneMoisture: 55,
+    windSpeed2m: 2.0,
+    ensemble14d: { confiancaConsensoPct: 85, chuvaMedianaSemana2Mm: 18, tendenciaSemana2: 'SECA' },
+  },
+  regiaoPr
+);
+registrarResultado(
+  'Teste 21: Planejador por Data/Operação (fora da IA) calcula veredito de solo e % de acerto por horizonte',
+  planPlantioHoje.veredito === 'NAO_RECOMENDADA' &&
+    planPlantioHoje.precisaoPrevisaoPct === 90 &&
+    planPlantio10d.precisaoPrevisaoPct < planPlantioHoje.precisaoPrevisaoPct &&
+    planPlantio10d.fonteOficial.includes('EMBRAPA'),
+  `Hoje: ${planPlantioHoje.veredito} (${planPlantioHoje.precisaoPrevisaoPct}% acerto) | +10d: ${planPlantio10d.veredito} (${planPlantio10d.precisaoPrevisaoPct}% acerto)`
 );
 
 console.log('\n============================================================================');
