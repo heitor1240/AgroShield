@@ -534,6 +534,73 @@ registrarResultado(
     srv.close();
   }
 
+  // ============================================================================
+  // TESTE 25: SoilGrids extrai carbono orgânico (soc -> socGKg) e alimenta SOCt
+  // ============================================================================
+  const soilComSoc = processarSoilGrids({
+    properties: {
+      layers: [
+        { name: 'clay', depths: [{ values: { mean: 460 } }] },
+        { name: 'sand', depths: [{ values: { mean: 210 } }] },
+        { name: 'phh2o', depths: [{ values: { mean: 58 } }] },
+        { name: 'soc', depths: [{ values: { mean: 360 } }] },
+      ],
+    },
+  });
+  const bioComSoc = avaliarModeloBiofisicoProbabilistico(
+    { crop: 'Soja', currentRotation: 'Soja → Milho Safrinha' },
+    { predictedRain: 10, soilMoisture: 52, smapRootWetness: 54, soilGrids: soilComSoc },
+    regiaoPr,
+    { stateless: true }
+  );
+  registrarResultado(
+    'Teste 25: SoilGrids extrai carbono orgânico (socGKg) e alimenta SOCt do modelo biofísico',
+    soilComSoc !== null && soilComSoc.socGKg === 36 && bioComSoc.estadoBiofisico.carbonoOrganicoIdx >= 0.7,
+    `socGKg=${soilComSoc?.socGKg} g/kg -> SOCt=${bioComSoc.estadoBiofisico.carbonoOrganicoIdx}`
+  );
+
+  // ============================================================================
+  // TESTE 26: Persistência temporal da Memória Agrícola (Rt) por talhão
+  // ============================================================================
+  const { atualizarMemoriaAgricola, validarAssinaturaTwilio } = require('./server');
+  const talhaoTeste = { crop: 'Soja', currentRotation: 'Soja → Milho Safrinha', centroid: { lat: -24.111, lng: -52.222 } };
+  const ciclo1 = atualizarMemoriaAgricola(talhaoTeste, { predictedRain: 12 });
+  const ciclo2 = atualizarMemoriaAgricola(talhaoTeste, { predictedRain: 12 });
+  registrarResultado(
+    'Teste 26: Memória Agrícola Rt evolui e persiste entre ciclos do mesmo talhão',
+    ciclo1.ciclosRegistrados === 1 &&
+      ciclo2.ciclosRegistrados === 2 &&
+      ciclo2.residuosRres > ciclo1.residuosRres,
+    `Ciclo 1 Rres=${ciclo1.residuosRres} -> Ciclo 2 Rres=${ciclo2.residuosRres}`
+  );
+
+  // ============================================================================
+  // TESTE 27: Validação criptográfica HMAC-SHA1 X-Twilio-Signature
+  // ============================================================================
+  const crypto = require('crypto');
+  const prevToken = process.env.TWILIO_AUTH_TOKEN;
+  process.env.TWILIO_AUTH_TOKEN = 'test_token_123';
+  const urlTeste = 'https://agroshield.example.com/api/sms-responder';
+  const bodyTeste = { Body: 'Posso plantar?', From: '+5544999874707' };
+  const sigCorreta = crypto
+    .createHmac('sha1', 'test_token_123')
+    .update(`${urlTeste}BodyPosso plantar?From+5544999874707`, 'utf8')
+    .digest('base64');
+  const okSig = validarAssinaturaTwilio(
+    { headers: { 'x-twilio-signature': sigCorreta }, body: bodyTeste },
+    urlTeste
+  );
+  const badSig = validarAssinaturaTwilio(
+    { headers: { 'x-twilio-signature': 'assinatura_falsa' }, body: bodyTeste },
+    urlTeste
+  );
+  process.env.TWILIO_AUTH_TOKEN = prevToken;
+  registrarResultado(
+    'Teste 27: Validação HMAC-SHA1 (X-Twilio-Signature) aceita assinatura válida e rejeita forjada',
+    okSig === true && badSig === false,
+    `válida=${okSig} | forjada=${badSig}`
+  );
+
   console.log('\n============================================================================');
   console.log(`📊 RESUMO DA AUDITORIA: ${testesPassados.length} passaram | ${bugsEncontrados.length} bugs encontrados`);
   console.log('============================================================================');
