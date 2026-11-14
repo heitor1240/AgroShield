@@ -68,7 +68,7 @@ export default function AnalysisDashboard({
   }
 
   return <div className="dashboard entrance">
-    <div className={`risk-banner risk-${analysis.risk}`}><AlertTriangle size={30} /><div><span className="eyebrow">ALERTA DO TALHÃO</span><h2>{label}</h2></div><span className="risk-source"><Satellite size={15} /> {analysis.source === 'demo' ? 'Monitoramento simulado • NASA GPM' : `Monitoramento ativo • ${analysis.manualSource || 'NASA POWER + IA'}`}</span></div>
+    <div className={`risk-banner risk-${analysis.risk}`}><AlertTriangle size={30} /><div><span className="eyebrow">ALERTA DO TALHÃO</span><h2>{label}</h2></div><span className="risk-source"><Satellite size={15} /> {analysis.source === 'demo' ? 'Monitoramento simulado • NASA GPM' : `${analysis.dataSources || 'NASA POWER'} • ${analysis.manualSource || 'IA'}`}</span></div>
     <div className="field-summary">
       <span><Sprout size={16} /> {field.crop} · {formatNumber(field.areaHectares)} ha</span>
       <span>{field.centroid.lat.toFixed(5)}, {field.centroid.lng.toFixed(5)}</span>

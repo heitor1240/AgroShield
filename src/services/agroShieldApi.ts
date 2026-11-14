@@ -40,6 +40,7 @@ export interface FieldAnalysis {
   regionName?: string;
   soilType?: string;
   manualSource?: string;
+  dataSources?: string;
   smsAlert?: SmsAlertLog | null;
   guidance: string;
   actions: string[];

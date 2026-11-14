@@ -220,9 +220,44 @@ const SIGLAS_MESES_NASA = [
   'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC',
 ];
 
-// Cache em memória das leituras da NASA POWER por coordenada (evita delay de 4s da NASA a cada clique)
+// Cache em memória das leituras da NASA POWER + Open-Meteo por coordenada (evita delay a cada clique)
 const cacheNasaPorCoordenada = new Map();
 const cacheDiagnosticoIa = new Map();
+
+/**
+ * Fonte auxiliar em tempo real (0h de atraso + próximas 24h) via Open-Meteo (gratuita, global, sem chave).
+ * Preenche a janela de latência de 2-7 dias da NASA POWER mantendo a NASA como fonte principal.
+ */
+async function buscarOpenMeteoTempoReal(lat, lng) {
+  try {
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&daily=precipitation_sum,wind_speed_10m_max&past_days=1&forecast_days=2&timezone=auto`;
+    const res = await axios.get(url, { timeout: 2500 });
+    const daily = res?.data?.daily || {};
+
+    const chuvas = (daily.precipitation_sum || []).filter(
+      (v) => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 600
+    );
+    const ventos10mKmh = (daily.wind_speed_10m_max || []).filter(
+      (v) => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 200
+    );
+
+    if (chuvas.length === 0 && ventos10mKmh.length === 0) return null;
+
+    const chuva24hMm = chuvas.length > 0 ? Math.round(Math.max(...chuvas)) : 0;
+    // Conversão padrão FAO-56 de vento a 10m para 2m: u2 = u10 * 0.748 (para comparar com NASA WS2M)
+    const maxVento10mKmh = ventos10mKmh.length > 0 ? Math.max(...ventos10mKmh) : 0;
+    const vento2mKmh = Number((maxVento10mKmh * 0.748).toFixed(1));
+    const vento2mMs = Number((vento2mKmh / 3.6).toFixed(1));
+
+    return {
+      chuva24hMm,
+      vento2mKmh,
+      vento2mMs,
+    };
+  } catch {
+    return null;
+  }
+}
 
 async function buscarDadosNasaParaFrontEnd(lat, lng) {
   const chaveCoord = `${Number(lat).toFixed(2)}_${Number(lng).toFixed(2)}`;
@@ -244,9 +279,10 @@ async function buscarDadosNasaParaFrontEnd(lat, lng) {
     // 2. Daily: Precipitação (PRECTOTCORR), Umidade Superficial do Solo (GWETTOP) e Vento a 2m (WS2M)
     const urlDaily = `https://power.larc.nasa.gov/api/temporal/daily/point?parameters=PRECTOTCORR,GWETTOP,WS2M&community=AG&longitude=${lng}&latitude=${lat}&start=${dataInicio}&end=${dataFim}&format=JSON`;
 
-    const [resClima, resDaily] = await Promise.all([
+    const [resClima, resDaily, openMeteo] = await Promise.all([
       axios.get(urlClimatology, { timeout: 3500 }),
       axios.get(urlDaily, { timeout: 3500 }),
+      buscarOpenMeteoTempoReal(lat, lng),
     ]);
 
     const mesIdx = agora.getMonth();
@@ -282,7 +318,12 @@ async function buscarDadosNasaParaFrontEnd(lat, lng) {
 
     const picoDiarioMm = Math.max(...chuvasValidas);
     const acumuladoJanelaMm = chuvasValidas.reduce((a, b) => a + b, 0);
-    const predictedRain = Math.round(Math.max(picoDiarioMm, acumuladoJanelaMm));
+    const nasaPredictedRain = Math.round(Math.max(picoDiarioMm, acumuladoJanelaMm));
+
+    // Fusão conservadora: NASA POWER (principal) + Open-Meteo (tempo real 0h de atraso + próximas 24h)
+    const predictedRain = openMeteo
+      ? Math.round(Math.max(nasaPredictedRain, openMeteo.chuva24hMm))
+      : nasaPredictedRain;
 
     // Umidade do solo (GWETTOP vem de 0.0 a 1.0 na NASA POWER -> convertemos para 0 a 100%)
     const ultimaUmidade =
@@ -291,8 +332,11 @@ async function buscarDadosNasaParaFrontEnd(lat, lng) {
         : Math.min(0.92, 0.45 + predictedRain / 200);
     const soilMoisture = Math.min(99, Math.max(15, Math.round(ultimaUmidade * 100)));
 
-    const windSpeed2m =
+    const nasaWindSpeed2m =
       ventosValidos.length > 0 ? Number(Math.max(...ventosValidos).toFixed(1)) : 2.8;
+    const windSpeed2m = openMeteo
+      ? Number(Math.max(nasaWindSpeed2m, openMeteo.vento2mMs).toFixed(1))
+      : nasaWindSpeed2m;
 
     // Gabarito físico determinístico (Pré-IA alinhado às diretrizes EMBRAPA/ZARC: vento > 2.7 m/s e chuva > 50mm)
     let minPhysicalRisk = 'green';
@@ -313,6 +357,10 @@ async function buscarDadosNasaParaFrontEnd(lat, lng) {
       windSpeed2m,
       minPhysicalRisk,
       nasaLive: true,
+      openMeteoLive: Boolean(openMeteo),
+      dataSources: openMeteo
+        ? 'NASA POWER (Principal) + Open-Meteo (Tempo Real 24h)'
+        : 'NASA POWER',
     };
     cacheNasaPorCoordenada.set(chaveCoord, resultadoNasa);
     return resultadoNasa;
@@ -325,6 +373,8 @@ async function buscarDadosNasaParaFrontEnd(lat, lng) {
       windSpeed2m: 5.2,
       minPhysicalRisk: 'red',
       nasaLive: false,
+      openMeteoLive: false,
+      dataSources: 'Fallback Determinístico (NASA indisponível)',
     };
   }
 }
@@ -744,6 +794,7 @@ function auditarEFormatarParaFrontEnd(iaJsonBruto, fieldReq, nasaMetrics) {
     regionName: regiao.nome,
     soilType: regiao.solo,
     manualSource: regiao.fonte,
+    dataSources: nasaMetrics.dataSources || 'NASA POWER',
     guidance,
     actions,
     technicalReason,
@@ -835,7 +886,7 @@ O array "actions" DEVE ter exatamente 3 strings.`;
 📌 Coordenadas: ${fieldReq.centroid.lat}, ${fieldReq.centroid.lng} | Área: ${fieldReq.areaHectares} ha
 🌱 CULTURA: ${fieldReq.crop} | Rotação: ${fieldReq.currentRotation}
 
-🛰️ DADOS DE SATÉLITE (NASA POWER):
+🛰️ DADOS DE SATÉLITE E TEMPO REAL (${nasaMetrics.dataSources || 'NASA POWER'}):
 - Média histórica de chuva: ${nasaMetrics.historicalRain} mm
 - Pico de chuva recente (PRECTOTCORR): ${nasaMetrics.predictedRain} mm
 - Umidade superficial do solo (GWETTOP): ${nasaMetrics.soilMoisture}%
