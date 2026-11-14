@@ -680,6 +680,62 @@ const anthropic = new Anthropic({
 const PESO_RISK = { green: 0, yellow: 1, red: 2 };
 
 /**
+ * Auditor Numérico Anti-Alucinação:
+ * Verifica se o LLM inventou valores em "mm", "km/h" ou "%" que não correspondem
+ * aos dados reais da NASA/Open-Meteo nem aos limites do manual técnico regional.
+ */
+function contemNumeroAlucinado(texto, nasaMetrics, limites, ventoKmh) {
+  if (typeof texto !== 'string' || !texto.trim()) return false;
+  const normalizado = texto.replace(/(\d+),(\d+)/g, '$1.$2');
+
+  const mmPermitidos = [
+    nasaMetrics.predictedRain,
+    nasaMetrics.historicalRain,
+    limites.chuvaRedMm,
+    Math.round(limites.chuvaRedMm * 0.75),
+    24, // janela "24h" caso apareça próximo
+    48,
+  ];
+  const kmhPermitidos = [
+    ventoKmh,
+    limites.ventoDerivaKmh,
+    limites.ventoRedKmh,
+    3,
+  ];
+  const pctPermitidos = [
+    nasaMetrics.soilMoisture,
+    limites.umidadeRedPct,
+    limites.umidadeRedPct - 10,
+  ];
+
+  const pertoDeAlgum = (val, lista, tol) =>
+    lista.some((ref) => typeof ref === 'number' && Number.isFinite(ref) && Math.abs(val - ref) <= tol);
+
+  for (const match of normalizado.matchAll(/(\d+(?:\.\d+)?)\s*mm\b/gi)) {
+    const val = Number(match[1]);
+    if (Number.isFinite(val) && !pertoDeAlgum(val, mmPermitidos, 2.5)) {
+      return `Valor inventado "${match[0]}" não bate com NASA (${nasaMetrics.predictedRain}mm/${nasaMetrics.historicalRain}mm) nem manual (${limites.chuvaRedMm}mm)`;
+    }
+  }
+
+  for (const match of normalizado.matchAll(/(\d+(?:\.\d+)?)\s*km\/h\b/gi)) {
+    const val = Number(match[1]);
+    if (Number.isFinite(val) && !pertoDeAlgum(val, kmhPermitidos, 1.5)) {
+      return `Vento inventado "${match[0]}" não bate com medição (${ventoKmh}km/h) nem manual (${limites.ventoDerivaKmh}km/h)`;
+    }
+  }
+
+  for (const match of normalizado.matchAll(/(\d+(?:\.\d+)?)\s*%/g)) {
+    const val = Number(match[1]);
+    if (Number.isFinite(val) && !pertoDeAlgum(val, pctPermitidos, 3)) {
+      return `Umidade inventada "${match[0]}" não bate com GWETTOP (${nasaMetrics.soilMoisture}%) nem manual (${limites.umidadeRedPct}%)`;
+    }
+  }
+
+  return false;
+}
+
+/**
  * Garante 100% de compatibilidade com a função isAnalysis(value) de src/services/agroShieldApi.ts
  * e aplica o Poder de Veto Físico (manual regional EMBRAPA/ZARC) sobre a resposta da IA.
  */
@@ -739,8 +795,9 @@ function auditarEFormatarParaFrontEnd(iaJsonBruto, fieldReq, nasaMetrics) {
       : padrao.guidance;
 
   if (
-    riskFinal !== 'green' &&
-    /condi[cç][oõ]es favor[aá]veis|opera[cç][oõ]es liberadas/i.test(guidance)
+    (riskFinal !== 'green' &&
+      /condi[cç][oõ]es favor[aá]veis|opera[cç][oõ]es liberadas/i.test(guidance)) ||
+    contemNumeroAlucinado(guidance, nasaMetrics, lim, ventoKmh)
   ) {
     guidance = padrao.guidance;
   }
@@ -750,6 +807,10 @@ function auditarEFormatarParaFrontEnd(iaJsonBruto, fieldReq, nasaMetrics) {
     iaJsonBruto.technicalReason.trim().length > 15
       ? iaJsonBruto.technicalReason.trim()
       : padrao.technicalReason;
+
+  if (contemNumeroAlucinado(technicalReason, nasaMetrics, lim, ventoKmh)) {
+    technicalReason = padrao.technicalReason;
+  }
 
   // Garante que a fonte oficial (Embrapa/ZARC/USDA/INTA/FAO) esteja sempre citada na justificativa técnica
   if (!/embrapa|zarc|idr|usda|inta|inia|jrc|fao|iita|csiro|icar/i.test(technicalReason)) {
@@ -766,7 +827,8 @@ function auditarEFormatarParaFrontEnd(iaJsonBruto, fieldReq, nasaMetrics) {
         const contradizRisco =
           riskFinal !== 'green' &&
           /pode pulverizar|pulveriza[cç][aã]o liberada|entrar com trator pesado/i.test(limpo);
-        if (!contradizRisco && !actions.includes(limpo)) {
+        const alucinouNumero = Boolean(contemNumeroAlucinado(limpo, nasaMetrics, lim, ventoKmh));
+        if (!contradizRisco && !alucinouNumero && !actions.includes(limpo)) {
           actions.push(limpo);
         }
       }
@@ -1102,12 +1164,14 @@ function auditarSms2GContraFisica(textoIaBruto, fieldReq, nasaMetrics) {
   let texto = typeof textoIaBruto === 'string' ? textoIaBruto.replace(/\s+/g, ' ').trim() : '';
 
   // Verifica se a IA contradisse a física (ex: disse "SIM" ou "pode pulverizar" quando risco é red/yellow)
+  // ou se inventou números em mm / km/h / % que não existem na leitura real
   const iaDisseLiberado =
     /\bsim\b|pode pulverizar|pulveriza[cç][aã]o liberada|opera[cç][oõ]es liberadas|pode entrar/i.test(
       texto
     ) && !/\bn[aã]o\b/i.test(texto);
+  const alucinouNumeroSms = Boolean(contemNumeroAlucinado(texto, nasaMetrics, lim, ventoKmh));
 
-  if (!texto || texto.length < 10 || (riscoFisico !== 'green' && iaDisseLiberado)) {
+  if (!texto || texto.length < 10 || (riscoFisico !== 'green' && iaDisseLiberado) || alucinouNumeroSms) {
     if (riscoFisico === 'red') {
       texto = `AGROSHIELD: NAO opere em ${fieldReq.crop}. Chuva ${chuvaMm}mm e vento ${ventoKmh}km/h (${regiao.fonte}). Risco de atolamento e deriva.`;
     } else if (riscoFisico === 'yellow') {
@@ -1372,4 +1436,5 @@ module.exports = {
   gerarAnaliseComClaude,
   auditarSms2GContraFisica,
   escaparXmlTwiml,
+  contemNumeroAlucinado,
 };

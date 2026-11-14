@@ -214,6 +214,48 @@ registrarResultado(
   `rainLimitMm=${resVeto.rainLimitMm}, windLimitKmh=${resVeto.windLimitKmh}, windSpeedKmh=${resVeto.windSpeedKmh}`
 );
 
+// ----------------------------------------------------------------------------
+// TESTE 12: Auditor Numérico Anti-Alucinação no Dashboard (LLM inventando "250 mm" ou "95 km/h")
+// ----------------------------------------------------------------------------
+const resAlucinacaoNumerica = auditarEFormatarParaFrontEnd(
+  {
+    risk: 'red',
+    guidance: 'Alerta crítico: chuva inventada de 250 mm e vento falso de 95 km/h na lavoura.',
+    actions: [
+      'Cancelar operação devido à chuva falsa de 250 mm',
+      'Retirar máquinas do talhão',
+      'Monitorar drenagem',
+    ],
+    technicalReason: 'EMBRAPA: Umidade inventada de 12% e chuva de 250 mm.',
+  },
+  reqPadrao,
+  nasaPadrao
+);
+const bloqueouNumerosInventados =
+  !resAlucinacaoNumerica.guidance.includes('250 mm') &&
+  !resAlucinacaoNumerica.guidance.includes('95 km/h') &&
+  !resAlucinacaoNumerica.technicalReason.includes('250 mm') &&
+  !resAlucinacaoNumerica.actions.some((a) => a.includes('250 mm'));
+registrarResultado(
+  'Teste 12: Auditor Numérico bloqueia números inventados pela IA (250 mm / 95 km/h / 12%) no texto e actions',
+  bloqueouNumerosInventados,
+  `Guidance auditada com dados reais (60 mm / 14.4 km/h): "${resAlucinacaoNumerica.guidance.slice(0, 75)}..."`
+);
+
+// ----------------------------------------------------------------------------
+// TESTE 13: Auditor Numérico Anti-Alucinação no SMS 2G Offline
+// ----------------------------------------------------------------------------
+const smsNumeroInventado = auditarSms2GContraFisica(
+  'AGROSHIELD: NAO opere. Chuva de 300 mm e vento de 88 km/h detectados agora.',
+  reqPadrao,
+  nasaPadrao
+);
+registrarResultado(
+  'Teste 13: Auditor Numérico bloqueia números inventados pela IA no SMS 2G Offline',
+  !smsNumeroInventado.includes('300') && !smsNumeroInventado.includes('88'),
+  `SMS corrigido com números reais: "${smsNumeroInventado}"`
+);
+
 console.log('\n============================================================================');
 console.log(`📊 RESUMO DA AUDITORIA: ${testesPassados.length} passaram | ${bugsEncontrados.length} bugs encontrados`);
 console.log('============================================================================');
