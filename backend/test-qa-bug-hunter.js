@@ -16,6 +16,7 @@ const {
   calcularTendenciaMarkov,
   avaliarCertezaAlertaSms,
   processarEnsemble14Dias,
+  processarSoilGrids,
 } = require('./server');
 
 function isAnalysisFrontEndValidator(v) {
@@ -346,6 +347,29 @@ registrarResultado(
     scoreSoloSaturado.minPhysicalRisk === 'red' &&
     scoreSoloSaturado.riskScore > scoreSoloSeco.riskScore + 25,
   `20mm solo seco: score ${scoreSoloSeco.riskScore}/100 (${scoreSoloSeco.minPhysicalRisk}) | 20mm solo saturado SMAP 84%: score ${scoreSoloSaturado.riskScore}/100 (${scoreSoloSaturado.minPhysicalRisk})`
+);
+
+// ----------------------------------------------------------------------------
+// TESTE 19: Blindagem da API de Solo (ISRIC SoilGrids v2.0) contra HTML/erro e conversão g/kg -> %
+// ----------------------------------------------------------------------------
+const soloHtmlErro = processarSoilGrids('<html><body>502 Bad Gateway</body></html>');
+const soloValido = processarSoilGrids({
+  properties: {
+    layers: [
+      { name: 'clay', depths: [{ values: { mean: 480 } }] },
+      { name: 'sand', depths: [{ values: { mean: 220 } }] },
+      { name: 'phh2o', depths: [{ values: { mean: 56 } }] },
+    ],
+  },
+});
+registrarResultado(
+  'Teste 19: API de Solo (SoilGrids) converte argila/pH com segurança e ignora respostas HTML 502',
+  soloHtmlErro === null &&
+    soloValido !== null &&
+    soloValido.argilaPct === 48 &&
+    soloValido.ph === 5.6 &&
+    soloValido.classeTextural === 'Solo Argiloso',
+  `HTML 502 => null | Válido => ${soloValido?.classeTextural} (${soloValido?.argilaPct}% argila, pH ${soloValido?.ph})`
 );
 
 console.log('\n============================================================================');

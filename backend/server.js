@@ -230,9 +230,10 @@ const cacheDiagnosticoIa = new Map();
  */
 async function buscarOpenMeteoTempoReal(lat, lng) {
   try {
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&daily=precipitation_sum,wind_speed_10m_max,et0_fao_evapotranspiration&past_days=1&forecast_days=7&timezone=auto`;
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&hourly=soil_temperature_0cm,soil_moisture_0_to_1cm&daily=precipitation_sum,wind_speed_10m_max,et0_fao_evapotranspiration&past_days=1&forecast_days=7&timezone=auto`;
     const res = await axios.get(url, { timeout: 2500 });
     const daily = res?.data?.daily || {};
+    const hourly = res?.data?.hourly || {};
 
     const chuvasAll = (daily.precipitation_sum || []).filter(
       (v) => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 600
@@ -243,6 +244,12 @@ async function buscarOpenMeteoTempoReal(lat, lng) {
       .filter((v) => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 200);
     const et0List = (daily.et0_fao_evapotranspiration || []).filter(
       (v) => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 30
+    );
+    const tempsSolo = (hourly.soil_temperature_0cm || []).filter(
+      (v) => typeof v === 'number' && Number.isFinite(v) && v >= -20 && v <= 70
+    );
+    const umidSoloVol = (hourly.soil_moisture_0_to_1cm || []).filter(
+      (v) => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1
     );
 
     if (chuvas24h.length === 0 && ventos10mKmh.length === 0) return null;
@@ -258,13 +265,80 @@ async function buscarOpenMeteoTempoReal(lat, lng) {
     const balancoHidrico7dMm =
       et0List.length > 0 ? Math.round(chuva7dMm - et07dMm) : null;
 
+    const soilTempC =
+      tempsSolo.length > 0 ? Number(tempsSolo[tempsSolo.length - 1].toFixed(1)) : null;
+    const soilVolumetricM3 =
+      umidSoloVol.length > 0 ? Number(umidSoloVol[umidSoloVol.length - 1].toFixed(3)) : null;
+
     return {
       chuva24hMm,
       vento2mKmh,
       vento2mMs,
       balancoHidrico7dMm,
+      soilTempC,
+      soilVolumetricM3,
     };
   } catch {
+    return null;
+  }
+}
+
+const cacheSoilGrids = new Map();
+
+/**
+ * Valida e converte a resposta da API ISRIC SoilGrids v2.0 (g/kg -> %, pH*10 -> pH).
+ * Protegida contra respostas HTML/erro (502/504) ou pixels nulos (água/urbano).
+ */
+function processarSoilGrids(data) {
+  if (!data || typeof data !== 'object' || !Array.isArray(data?.properties?.layers)) {
+    return null;
+  }
+  const extrair = (nome) => {
+    const layer = data.properties.layers.find((l) => l?.name === nome);
+    const val = layer?.depths?.[0]?.values?.mean;
+    return typeof val === 'number' && Number.isFinite(val) && val >= 0 ? val : null;
+  };
+
+  const clayRaw = extrair('clay');
+  const sandRaw = extrair('sand');
+  const phRaw = extrair('phh2o');
+  if (clayRaw === null && sandRaw === null) return null;
+
+  const argilaPct = clayRaw !== null ? Math.round(clayRaw / 10) : null;
+  const areiaPct = sandRaw !== null ? Math.round(sandRaw / 10) : null;
+  const ph = phRaw !== null ? Number((phRaw / 10).toFixed(1)) : null;
+
+  if (argilaPct !== null && (argilaPct < 0 || argilaPct > 100)) return null;
+  if (areiaPct !== null && (areiaPct < 0 || areiaPct > 100)) return null;
+  if (ph !== null && (ph < 3 || ph > 10)) return null;
+
+  let classeTextural = 'Textura Média';
+  if (argilaPct !== null && argilaPct >= 35) classeTextural = 'Solo Argiloso';
+  else if (areiaPct !== null && areiaPct >= 60) classeTextural = 'Solo Arenoso';
+
+  return {
+    fonte: 'ISRIC SoilGrids v2.0',
+    classeTextural,
+    argilaPct,
+    areiaPct,
+    ph,
+  };
+}
+
+async function buscarPerfilSoloSoilGrids(lat, lng) {
+  const chave = `${Number(lat).toFixed(2)}_${Number(lng).toFixed(2)}`;
+  const cached = cacheSoilGrids.get(chave);
+  if (cached && Date.now() - cached.ts < 10 * 60 * 1000) {
+    return cached.value;
+  }
+  try {
+    const url = `https://rest.isric.org/soilgrids/v2.0/properties/query?lon=${lng}&lat=${lat}&property=clay&property=sand&property=phh2o&depth=0-5cm&value=mean`;
+    const res = await axios.get(url, { timeout: 2000 });
+    const perfil = processarSoilGrids(res?.data);
+    cacheSoilGrids.set(chave, { ts: Date.now(), value: perfil });
+    return perfil;
+  } catch {
+    cacheSoilGrids.set(chave, { ts: Date.now(), value: null });
     return null;
   }
 }
@@ -429,11 +503,12 @@ async function buscarDadosNasaParaFrontEnd(lat, lng) {
     // 2. Daily: Precipitação (PRECTOTCORR), Umidade Superficial (GWETTOP), Umidade Zona Radicular SMAP (GWETROOT) e Vento a 2m (WS2M)
     const urlDaily = `https://power.larc.nasa.gov/api/temporal/daily/point?parameters=PRECTOTCORR,GWETTOP,GWETROOT,WS2M&community=AG&longitude=${lng}&latitude=${lat}&start=${dataInicio}&end=${dataFim}&format=JSON`;
 
-    const [resClima, resDaily, openMeteo, ensembleRaw] = await Promise.all([
+    const [resClima, resDaily, openMeteo, ensembleRaw, soilGrids] = await Promise.all([
       axios.get(urlClimatology, { timeout: 3500 }),
       axios.get(urlDaily, { timeout: 3500 }),
       buscarOpenMeteoTempoReal(lat, lng),
       buscarEnsemble14Dias(lat, lng),
+      buscarPerfilSoloSoilGrids(lat, lng),
     ]);
     const ensemble14d = ensembleRaw
       ? {
@@ -525,6 +600,9 @@ async function buscarDadosNasaParaFrontEnd(lat, lng) {
       predictedRain,
       soilMoisture,
       rootZoneMoisture,
+      soilTempC: openMeteo?.soilTempC ?? null,
+      soilVolumetricM3: openMeteo?.soilVolumetricM3 ?? null,
+      soilGrids: soilGrids || null,
       windSpeed2m,
       minPhysicalRisk,
       markov,
@@ -1065,6 +1143,9 @@ function auditarEFormatarParaFrontEnd(iaJsonBruto, fieldReq, nasaMetrics) {
     predictedRain: Number(predictedRain),
     soilMoisture: Number(soilMoisture),
     rootZoneMoisture: Number(nasaMetrics.rootZoneMoisture ?? soilMoisture),
+    soilTempC: nasaMetrics.soilTempC ?? null,
+    soilVolumetricM3: nasaMetrics.soilVolumetricM3 ?? null,
+    soilGrids: nasaMetrics.soilGrids ?? null,
     riskScore: Number(nasaMetrics.riskScore ?? 50),
     windSpeedKmh: Number(ventoKmh),
     windLimitKmh: Number(regiao.limites.ventoDerivaKmh),
@@ -1785,4 +1866,5 @@ module.exports = {
   calcularTendenciaMarkov,
   avaliarCertezaAlertaSms,
   processarEnsemble14Dias,
+  processarSoilGrids,
 };
