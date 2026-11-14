@@ -322,14 +322,23 @@ export default function AnalysisDashboard({
               {analysis.biophysModel && (
                 <div className="markov-strip">
                   <strong>
-                    Modelo Biofísico-Probabilístico (POMDP · Crença bₜ &amp; Memória Rₜ):
+                    Saúde e capacidade do solo (bₜ &amp; Memória Rₜ):
                   </strong>
                   <span>
-                    Regime: <b>{analysis.biophysModel.crencaHmm.regimeDominante}</b> (Ideal{" "}
-                    {analysis.biophysModel.crencaHmm.probabilidadesPct.ideal}% · Sat.{" "}
-                    {analysis.biophysModel.crencaHmm.probabilidadesPct.saturado}%) · INFₜ:{" "}
+                    Condição:{" "}
+                    <b>
+                      {analysis.biophysModel.crencaHmm.regimeDominante === "SATURADO_ESTRESSE"
+                        ? "Solo encharcado"
+                        : analysis.biophysModel.crencaHmm.regimeDominante === "SECO_FAVORAVEL"
+                          ? "Solo seco"
+                          : "Condição ideal"}
+                    </b>{" "}
+                    (Ideal {analysis.biophysModel.crencaHmm.probabilidadesPct.ideal}% · Encharcado{" "}
+                    {analysis.biophysModel.crencaHmm.probabilidadesPct.saturado}%) · Infiltração
+                    (INFₜ):{" "}
                     <b>{analysis.biophysModel.estadoBiofisico.infiltracaoEstimadaMmH} mm/h</b> ·
-                    Ação ótima π*(bₜ): <b>{analysis.biophysModel.politicaOtima.acaoOtima}</b>
+                    Melhor decisão agora (π*):{" "}
+                    <b>{analysis.biophysModel.politicaOtima.acaoOtima}</b>
                   </span>
                 </div>
               )}
