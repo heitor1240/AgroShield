@@ -49,7 +49,7 @@ export async function analyzeField(data: FieldRequest, backendUrl?: string): Pro
     if (!['https:', 'http:'].includes(url.protocol)) throw new Error('Endereço inválido');
     const response = await fetch(`${backendUrl.replace(/\/$/, '')}/api/analyze-field`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data), signal: AbortSignal.timeout(15000),
+      body: JSON.stringify(data), signal: AbortSignal.timeout(35000),
     });
     if (!response.ok) throw new Error('Falha na análise');
     const result: unknown = await response.json();

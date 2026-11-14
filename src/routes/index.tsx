@@ -27,8 +27,8 @@ function Index() {
   const [center, setCenter] = useState<Coordinate>(INITIAL_CENTER);
   const [crop, setCrop] = useState<Crop>('Soja');
   const [rotation, setRotation] = useState(rotations[0] ?? 'Soja → Milho Safrinha');
-  const [backendUrl, setBackendUrl] = useState('');
-  const [urlDraft, setUrlDraft] = useState('');
+  const [backendUrl, setBackendUrl] = useState('http://localhost:3000');
+  const [urlDraft, setUrlDraft] = useState('http://localhost:3000');
   const [connectionOpen, setConnectionOpen] = useState(false);
   const [urlError, setUrlError] = useState('');
   const [progress, setProgress] = useState(0);
