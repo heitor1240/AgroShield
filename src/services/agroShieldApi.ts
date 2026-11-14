@@ -108,6 +108,17 @@ export interface FieldAnalysis {
   ensemble14d?: Ensemble14d | null;
   operationPlan?: OperationPlan | null;
   biophysModel?: BiophysModel | null;
+  elevation?: {
+    altitudeMediaM: number;
+    desnivelM: number;
+    declividadePct: number;
+    riscoTopografico: string;
+  } | null;
+  hourlyWindow?: {
+    melhorJanela: string;
+    horasSeguras: number;
+    resumo: string;
+  } | null;
   smsAlert?: SmsAlertLog | null;
   guidance: string;
   actions: string[];

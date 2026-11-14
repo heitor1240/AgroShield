@@ -254,7 +254,7 @@ const cacheDiagnosticoIa = new Map();
  */
 async function buscarOpenMeteoTempoReal(lat, lng) {
   try {
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&hourly=soil_temperature_0cm,soil_moisture_0_to_1cm&daily=precipitation_sum,wind_speed_10m_max,et0_fao_evapotranspiration&past_days=1&forecast_days=7&timezone=auto`;
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&hourly=soil_temperature_0cm,soil_moisture_0_to_1cm,wind_speed_10m,precipitation&daily=precipitation_sum,wind_speed_10m_max,et0_fao_evapotranspiration&past_days=1&forecast_days=7&timezone=auto`;
     const res = await axios.get(url, { timeout: 2500 });
     const daily = res?.data?.daily || {};
     const hourly = res?.data?.hourly || {};
@@ -294,6 +294,39 @@ async function buscarOpenMeteoTempoReal(lat, lng) {
     const soilVolumetricM3 =
       umidSoloVol.length > 0 ? Number(umidSoloVol[umidSoloVol.length - 1].toFixed(3)) : null;
 
+    // Janela horária nas próximas 24h (índice 24..47 por causa de past_days=1)
+    let janelaHorariaHoje = null;
+    const hTimes = Array.isArray(hourly.time) ? hourly.time : [];
+    const hWind = Array.isArray(hourly.wind_speed_10m) ? hourly.wind_speed_10m : [];
+    const hPrec = Array.isArray(hourly.precipitation) ? hourly.precipitation : [];
+    if (hTimes.length >= 48 && hWind.length >= 48) {
+      const horasSeguras = [];
+      for (let idx = 24; idx < 48; idx++) {
+        const v2m = typeof hWind[idx] === 'number' ? hWind[idx] * 0.748 : 99;
+        const pMm = typeof hPrec[idx] === 'number' ? hPrec[idx] : 0;
+        if (v2m <= 10 && pMm <= 0.2) {
+          const hh = String(hTimes[idx]).slice(11, 13);
+          horasSeguras.push({ hh, v2m: Number(v2m.toFixed(1)) });
+        }
+      }
+      if (horasSeguras.length > 0) {
+        const inicio = horasSeguras[0].hh;
+        const fim = horasSeguras[horasSeguras.length - 1].hh;
+        const ventoMax = Math.max(...horasSeguras.map((h) => h.v2m));
+        janelaHorariaHoje = {
+          melhorJanela: `${inicio}h–${fim}h`,
+          horasSeguras: horasSeguras.length,
+          resumo: `${horasSeguras.length}h seguras (${inicio}h–${fim}h, vento máx. ${ventoMax} km/h)`,
+        };
+      } else {
+        janelaHorariaHoje = {
+          melhorJanela: 'Sem janela hoje',
+          horasSeguras: 0,
+          resumo: 'Nenhuma hora sem deriva/chuva nas próximas 24h',
+        };
+      }
+    }
+
     const forecastPorData = {};
     const timesDaily = Array.isArray(daily.time) ? daily.time : [];
     for (let i = 0; i < timesDaily.length; i++) {
@@ -318,8 +351,60 @@ async function buscarOpenMeteoTempoReal(lat, lng) {
       balancoHidrico7dMm,
       soilTempC,
       soilVolumetricM3,
+      janelaHorariaHoje,
       forecastPorData,
     };
+  } catch {
+    return null;
+  }
+}
+
+const cacheElevacao = new Map();
+async function buscarElevacaoTalhao(polygon, centroid) {
+  const pontos = [];
+  if (Array.isArray(polygon) && polygon.length >= 3) {
+    const step = Math.max(1, Math.floor(polygon.length / 4));
+    for (let i = 0; i < polygon.length && pontos.length < 4; i += step) {
+      const pt = polygon[i];
+      if (Array.isArray(pt) && Number.isFinite(Number(pt[0])) && Number.isFinite(Number(pt[1]))) {
+        pontos.push([Number(pt[0]), Number(pt[1])]);
+      }
+    }
+  }
+  if (centroid && Number.isFinite(centroid.lat) && Number.isFinite(centroid.lng)) {
+    pontos.push([centroid.lat, centroid.lng]);
+  }
+  if (pontos.length === 0) return null;
+
+  const chave = pontos.map(([la, ln]) => `${la.toFixed(3)},${ln.toFixed(3)}`).join('|');
+  const cached = cacheElevacao.get(chave);
+  if (cached && Date.now() - cached.ts < 30 * 60 * 1000) return cached.value;
+
+  try {
+    const lats = pontos.map((p) => p[0].toFixed(5)).join(',');
+    const lngs = pontos.map((p) => p[1].toFixed(5)).join(',');
+    const url = `https://api.open-meteo.com/v1/elevation?latitude=${lats}&longitude=${lngs}`;
+    const res = await axios.get(url, { timeout: 2000 });
+    const elevs = Array.isArray(res?.data?.elevation)
+      ? res.data.elevation.filter((v) => typeof v === 'number' && Number.isFinite(v))
+      : [];
+    if (elevs.length === 0) return null;
+
+    const minM = Math.min(...elevs);
+    const maxM = Math.max(...elevs);
+    const altitudeMediaM = Math.round(elevs.reduce((a, b) => a + b, 0) / elevs.length);
+    const desnivelM = Number((maxM - minM).toFixed(1));
+    const declividadePct = Number(Math.min(25, (desnivelM / 250) * 100).toFixed(1));
+    const riscoTopografico =
+      declividadePct >= 8 || desnivelM >= 20
+        ? 'ALTO_EROSAO_E_BAIXADA'
+        : declividadePct >= 3 || desnivelM >= 8
+          ? 'MODERADO'
+          : 'PLANO';
+
+    const value = { altitudeMediaM, desnivelM, declividadePct, riscoTopografico };
+    cacheElevacao.set(chave, { ts: Date.now(), value });
+    return value;
   } catch {
     return null;
   }
@@ -1547,10 +1632,11 @@ app.post('/api/analyze-field', async (req, res) => {
     );
     const lim = fieldReq.regiao.limites;
 
-    // 2.1 Consulta NASA POWER + Open-Meteo e Avisos Oficiais INMET/Defesa Civil em paralelo
-    const [nasaBrutoBase, alertaOficialInmet] = await Promise.all([
+    // 2.1 Consulta NASA POWER + Open-Meteo, INMET e Elevação SRTM/Open-Meteo em paralelo
+    const [nasaBrutoBase, alertaOficialInmet, elevation] = await Promise.all([
       buscarDadosNasaParaFrontEnd(fieldReq.centroid.lat, fieldReq.centroid.lng),
       buscarAlertaOficialInmet(fieldReq.centroid.lat, fieldReq.centroid.lng, fieldReq.regiao.uf),
+      buscarElevacaoTalhao(fieldReq.polygon, fieldReq.centroid),
     ]);
     let nasaBruto = aplicarCenarioClimatico(
       nasaBrutoBase,
@@ -1584,6 +1670,7 @@ app.post('/api/analyze-field', async (req, res) => {
 
     const nasaMetrics = {
       ...nasaBruto,
+      elevation,
       ...calcularPisoFisicoRegional(nasaBruto, lim),
     };
     console.log(
@@ -1625,6 +1712,8 @@ app.post('/api/analyze-field', async (req, res) => {
       climateScenario: fieldReq.climateScenario,
       operationPlan,
       biophysModel,
+      elevation,
+      hourlyWindow: nasaMetrics.janelaHorariaHoje || null,
       alertaDefesaCivil: alertaOficialInmet,
       smsGate: certezaSms,
       smsAlert,

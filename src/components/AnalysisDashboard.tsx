@@ -342,6 +342,26 @@ export default function AnalysisDashboard({
                   </span>
                 </div>
               )}
+              {(analysis.elevation || analysis.hourlyWindow) && (
+                <div className="markov-strip">
+                  <strong>Relevo do Talhão &amp; Janela Horária (24h):</strong>
+                  <span>
+                    {analysis.elevation && (
+                      <>
+                        Altitude <b>{analysis.elevation.altitudeMediaM} m</b> · Desnível{" "}
+                        <b>{analysis.elevation.desnivelM} m</b> (declividade{" "}
+                        {analysis.elevation.declividadePct}%)
+                      </>
+                    )}
+                    {analysis.elevation && analysis.hourlyWindow && " · "}
+                    {analysis.hourlyWindow && (
+                      <>
+                        Pulverização hoje: <b>{analysis.hourlyWindow.resumo}</b>
+                      </>
+                    )}
+                  </span>
+                </div>
+              )}
               <div className="rain-chart">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart

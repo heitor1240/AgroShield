@@ -89,6 +89,32 @@ export default function FieldMap(props: Props) {
   const [query, setQuery] = useState("");
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState("");
+  const [radarOn, setRadarOn] = useState(false);
+  const [radarUrl, setRadarUrl] = useState<string | null>(null);
+
+  async function toggleRadar() {
+    if (radarOn) {
+      setRadarOn(false);
+      return;
+    }
+    setRadarOn(true);
+    if (radarUrl) return;
+    try {
+      const res = await fetch("https://api.rainviewer.com/public/weather-maps.json");
+      if (!res.ok) return;
+      const data = (await res.json()) as {
+        host?: string;
+        radar?: { past?: Array<{ path?: string }> };
+      };
+      const past = data?.radar?.past || [];
+      const latest = past[past.length - 1]?.path;
+      if (data?.host && latest) {
+        setRadarUrl(`${data.host}${latest}/256/{z}/{x}/{y}/2/1_1.png`);
+      }
+    } catch {
+      // Radar opcional: ignora falha se estiver offline
+    }
+  }
   async function search(e: React.FormEvent) {
     e.preventDefault();
     if (!query.trim()) return;
@@ -126,6 +152,7 @@ export default function FieldMap(props: Props) {
           attribution="Tiles © Esri, Maxar, Earthstar Geographics"
         />
         <TileLayer url="https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}" />
+        {radarOn && radarUrl && <TileLayer url={radarUrl} opacity={0.55} />}
         {props.points.length >= 3 ? (
           <Polygon positions={props.points} pathOptions={{ className: "field-boundary" }} />
         ) : (
@@ -169,6 +196,22 @@ export default function FieldMap(props: Props) {
       )}
       <div className="map-layer">
         <Layers size={15} /> Satélite Esri
+        <button
+          type="button"
+          onClick={toggleRadar}
+          style={{
+            marginLeft: 8,
+            padding: "2px 8px",
+            borderRadius: 999,
+            border: "1px solid rgba(255,255,255,0.28)",
+            background: radarOn ? "#15803d" : "rgba(15,23,42,0.45)",
+            color: "#fff",
+            fontSize: "0.75rem",
+            cursor: "pointer",
+          }}
+        >
+          {radarOn ? "Radar ativo" : "Radar de chuva"}
+        </button>
       </div>
       <div className="map-location">
         <span className="live-dot" /> Campo Mourão, PR <span>24°02′ S · 52°23′ O</span>

@@ -300,6 +300,7 @@ function avaliarModeloBiofisicoProbabilistico(fieldReq, nasaMetrics, regiao, opc
   const pesos = { alpha: 0.35, beta: 0.15, delta: 0.15, lambda: 0.18, mu: 0.32 };
   const limVento = regiao?.limites?.ventoDerivaKmh || 10;
   const limChuva = regiao?.limites?.chuvaRedMm || 40;
+  const fatorDeclive = 1 + Math.min(0.45, Number(nasaMetrics.elevation?.declividadePct || 0) * 0.03);
 
   const candidatas = [
     {
@@ -307,7 +308,7 @@ function avaliarModeloBiofisicoProbabilistico(fieldReq, nasaMetrics, regiao, opc
       pi: 0.78,
       dSOC: 0.0,
       dAWC: 0.0,
-      erosao: clamp01((bt.saturado / 100) * 0.65 * (1 - Rt.residuosRres * 0.4)),
+      erosao: clamp01((bt.saturado / 100) * 0.65 * (1 - Rt.residuosRres * 0.4) * fatorDeclive),
       risk: clamp01((ventoKmh / limVento) * 0.55 + (chuvaMm / limChuva) * 0.45),
     },
     {
@@ -315,7 +316,7 @@ function avaliarModeloBiofisicoProbabilistico(fieldReq, nasaMetrics, regiao, opc
       pi: 0.85,
       dSOC: 0.18,
       dAWC: 0.12,
-      erosao: clamp01((chuvaMm / limChuva) * 0.55 * (1 - Rt.residuosRres * 0.45)),
+      erosao: clamp01((chuvaMm / limChuva) * 0.55 * (1 - Rt.residuosRres * 0.45) * fatorDeclive),
       risk: clamp01((bt.saturado / 100) * 0.75 + (chuvaMm / limChuva) * 0.35),
     },
     {
@@ -323,7 +324,7 @@ function avaliarModeloBiofisicoProbabilistico(fieldReq, nasaMetrics, regiao, opc
       pi: 0.74 - Rt.nitrogenioRN * 0.12,
       dSOC: 0.08,
       dAWC: 0.04,
-      erosao: clamp01((chuvaMm / limChuva) * 0.6),
+      erosao: clamp01((chuvaMm / limChuva) * 0.6 * fatorDeclive),
       risk: clamp01((chuvaMm / limChuva) * 0.7 + (bt.saturado / 100) * 0.4),
     },
     {
