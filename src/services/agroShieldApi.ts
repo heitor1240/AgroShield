@@ -7,12 +7,40 @@ export interface FieldRequest {
   areaHectares: number;
   crop: Crop;
   currentRotation: string;
+  simulateRisk?: Risk;
+}
+export interface SmsAlertLog {
+  tipo: string;
+  para: string;
+  mensagem: string;
+  caracteres: number;
+  timestamp: string;
+}
+export interface Sms2GResponse {
+  tipo: string;
+  de: string;
+  pergunta_agricultor: string;
+  regiao: string;
+  fonte_manual: string;
+  risco_fisico: Risk;
+  resposta_sms: string;
+  caracteres: number;
+  twiml: string;
+  timestamp: string;
 }
 export interface FieldAnalysis {
   risk: Risk;
   historicalRain: number;
   predictedRain: number;
   soilMoisture: number;
+  windSpeedKmh?: number;
+  windLimitKmh?: number;
+  rainLimitMm?: number;
+  regionCode?: string;
+  regionName?: string;
+  soilType?: string;
+  manualSource?: string;
+  smsAlert?: SmsAlertLog | null;
   guidance: string;
   actions: string[];
   technicalReason: string;
@@ -56,6 +84,27 @@ export async function analyzeField(data: FieldRequest, backendUrl?: string): Pro
     if (!isAnalysis(result)) throw new Error('Resposta incompatível');
     return { ...result, source: 'api' };
   } catch {
-    return { ...makeDemoAnalysis(), fallbackReason: 'Não foi possível acessar a API. Exibindo um cenário demonstrativo, sem dados ao vivo.' };
+    return { ...makeDemoAnalysis(data.simulateRisk ?? 'red'), fallbackReason: 'Não foi possível acessar a API. Exibindo um cenário demonstrativo, sem dados ao vivo.' };
   }
+}
+
+export async function sendSms2GQuery(
+  mensagem: string,
+  field: FieldRequest,
+  backendUrl = 'http://localhost:3000'
+): Promise<Sms2GResponse> {
+  const base = backendUrl.trim().replace(/\/$/, '') || 'http://localhost:3000';
+  const response = await fetch(`${base}/api/sms-responder?format=json`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      From: '+5544999999999',
+      Body: mensagem,
+      crop: field.crop,
+      centroid: field.centroid,
+    }),
+    signal: AbortSignal.timeout(20000),
+  });
+  if (!response.ok) throw new Error('Falha ao consultar SMS 2G no back-end');
+  return (await response.json()) as Sms2GResponse;
 }
