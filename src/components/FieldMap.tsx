@@ -7,7 +7,7 @@ import { INITIAL_CENTER, type Coordinate } from '@/lib/field';
 interface Props { points: Coordinate[]; onPointsChange: (points: Coordinate[]) => void; drawing: boolean; center: Coordinate; onCenterChange: (center: Coordinate) => void }
 function MapBehavior({ points, onPointsChange, drawing, center }: Props) {
   const map = useMap();
-  useEffect(() => { map.setView(center, 14, { animate: false }); return () => { map.stop(); }; }, [map, center]);
+  useEffect(() => { map.setView(center, 14, { animate: false }); }, [map, center]);
   useEffect(() => { if (!drawing && points.length >= 3) map.fitBounds(points, { padding: [60, 60], maxZoom: 16, animate: false }); }, [map, points, drawing]);
   useMapEvents({ click: e => { if (drawing) onPointsChange([...points, [e.latlng.lat, e.latlng.lng]]); } });
   return <div className="map-zoom"><Button variant="map" size="icon" aria-label="Aproximar mapa" title="Aproximar" onClick={() => map.zoomIn()}><Plus /></Button><Button variant="map" size="icon" aria-label="Afastar mapa" title="Afastar" onClick={() => map.zoomOut()}><Minus /></Button><Button variant="map" size="icon" aria-label="Centralizar em Campo Mourão" title="Campo Mourão" onClick={() => map.setView(INITIAL_CENTER, 14, { animate: false })}><LocateFixed /></Button></div>;
