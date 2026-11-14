@@ -28,3 +28,8 @@ use the editor.
   own key and store it in Secrets.
 - **Secrets.** Lovable manages them. Do not put secret values in the repo.
 <!-- LOVABLE:END -->
+
+## Application architecture
+- Keep polygon measurement in browser-safe Turf helpers and load the Leaflet map dynamically behind ClientOnly; Leaflet requires browser globals.
+- Keep the external analysis contract in src/services/agroShieldApi.ts; configured endpoints are called from the browser and demo fallbacks must be explicitly labeled, never presented as live NASA observations.
+- Keep visual roles and shared layout styles in src/styles.css and use the shared Button variants for controls.
