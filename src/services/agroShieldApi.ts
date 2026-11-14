@@ -37,10 +37,10 @@ export function makeDemoAnalysis(risk: Risk = 'red'): FieldAnalysis {
 function isAnalysis(value: unknown): value is FieldAnalysis {
   if (!value || typeof value !== 'object') return false;
   const v = value as Record<string, unknown>;
-  return ['red', 'yellow', 'green'].includes(String(v.risk)) &&
+  return ['red', 'yellow', 'green'].includes(String(v['risk'])) &&
     ['historicalRain', 'predictedRain', 'soilMoisture'].every(k => typeof v[k] === 'number' && Number.isFinite(v[k]) && Number(v[k]) >= 0) &&
-    typeof v.guidance === 'string' && typeof v.technicalReason === 'string' &&
-    Array.isArray(v.actions) && v.actions.length === 3 && v.actions.every(a => typeof a === 'string');
+    typeof v['guidance'] === 'string' && typeof v['technicalReason'] === 'string' &&
+    Array.isArray(v['actions']) && v['actions'].length === 3 && v['actions'].every(a => typeof a === 'string');
 }
 export async function analyzeField(data: FieldRequest, backendUrl?: string): Promise<FieldAnalysis> {
   if (!backendUrl?.trim()) return makeDemoAnalysis();
