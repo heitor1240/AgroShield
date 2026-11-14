@@ -1,7 +1,12 @@
 import { describe, it, expect, vi } from "vitest";
 import { calculateField, INITIAL_CENTER, EXAMPLE_FIELD } from "@/lib/field";
 import { getFieldLayerView } from "@/lib/field-layers";
-import { analyzeField, makeDemoAnalysis } from "@/services/agroShieldApi";
+import {
+  analyzeField,
+  makeDemoAnalysis,
+  makeDemoSms2GResponse,
+  sendSms2GQuery,
+} from "@/services/agroShieldApi";
 
 describe("Field selection", () => {
   it("starts in Campo Mourão at the requested coordinates", () => {
@@ -98,5 +103,32 @@ describe("Orbital field layers", () => {
     expect(getFieldLayerView(analysis, "ndvi").buttonValue).toBe("62%");
     expect(getFieldLayerView(analysis, "heat").buttonValue).toBe("32°C");
     expect(getFieldLayerView(analysis, "cover").buttonValue).toBe("66%");
+  });
+});
+describe("SMS 2G fallback", () => {
+  it("simulates 2G SMS in the frontend without throwing when offline or without backend", async () => {
+    const field = calculateField(EXAMPLE_FIELD);
+    if (!field) throw new Error("Example field missing");
+    const payload = {
+      polygon: EXAMPLE_FIELD,
+      ...field,
+      crop: "Soja" as const,
+      currentRotation: "Soja → Milho Safrinha",
+    };
+    const mock = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("offline"));
+    const smsOffline = await sendSms2GQuery(
+      "Posso plantar soja & milho?",
+      payload,
+      "http://localhost:3000",
+      makeDemoAnalysis("green"),
+    );
+    expect(smsOffline.caracteres).toBeLessThanOrEqual(150);
+    expect(smsOffline.resposta_sms).toContain("SIM");
+    expect(smsOffline.twiml).toContain("<Response><Message>");
+    mock.mockRestore();
+
+    const smsNoUrl = makeDemoSms2GResponse("Posso pulverizar?", payload, makeDemoAnalysis("red"));
+    expect(smsNoUrl.caracteres).toBeLessThanOrEqual(150);
+    expect(smsNoUrl.resposta_sms).toContain("NAO");
   });
 });

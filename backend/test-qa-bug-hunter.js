@@ -458,7 +458,151 @@ registrarResultado(
   `Ideal: ${bioIdeal.crencaHmm.regimeDominante} -> ${bioIdeal.politicaOtima.acaoOtima} | Tempestade: ${bioTempestade.crencaHmm.regimeDominante} -> ${bioTempestade.politicaOtima.acaoOtima}`
 );
 
-console.log('\n============================================================================');
-console.log(`📊 RESUMO DA AUDITORIA: ${testesPassados.length} passaram | ${bugsEncontrados.length} bugs encontrados`);
-console.log('============================================================================');
-if (bugsEncontrados.length > 0) process.exit(1);
+// ============================================================================
+// TESTE 23: Cenários ENSO (El Niño / La Niña) modulam chuva/solo por região
+// ============================================================================
+const { aplicarCenarioClimatico } = require('./server');
+const reqElNino = normalizarFieldRequest({
+  crop: 'Soja',
+  climateScenario: 'el-nino-2023-24',
+  centroid: { lat: -24.045, lng: -52.383 },
+});
+const basePr = { predictedRain: 40, soilMoisture: 60, smapRootWetness: 60, soilTempC: 24 };
+const prElNino = aplicarCenarioClimatico(basePr, 'el-nino-2023-24', 'PR');
+const prLaNina = aplicarCenarioClimatico(basePr, 'la-nina-2021-22', 'PR');
+const cerradoElNino = aplicarCenarioClimatico(basePr, 'el-nino-2023-24', 'CERRADO');
+registrarResultado(
+  'Teste 23: Cenário ENSO (El Niño / La Niña) modula chuva e umidade conforme a região',
+  reqElNino.climateScenario === 'el-nino-2023-24' &&
+    prElNino.predictedRain > basePr.predictedRain &&
+    prLaNina.predictedRain < basePr.predictedRain &&
+    cerradoElNino.predictedRain < basePr.predictedRain &&
+    cerradoElNino.soilTempC > basePr.soilTempC,
+  `PR El Niño=${prElNino.predictedRain}mm | PR La Niña=${prLaNina.predictedRain}mm | Cerrado El Niño=${cerradoElNino.predictedRain}mm (${cerradoElNino.soilTempC}°C)`
+);
+
+// ============================================================================
+// TESTE 24: Contrato completo HTTP (analyze-field + sms-responder em servidor efêmero)
+// ============================================================================
+(async () => {
+  const { app } = require('./server');
+  const srv = await new Promise((resolve) => {
+    const s = app.listen(0, () => resolve(s));
+  });
+  try {
+    const port = srv.address().port;
+    const rAnalyze = await fetch(`http://127.0.0.1:${port}/api/analyze-field`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        centroid: { lat: -24.045, lng: -52.383 },
+        crop: 'Soja',
+        currentRotation: 'Soja → Milho Safrinha',
+        climateScenario: 'el-nino-2023-24',
+        plannedOperation: 'Plantar',
+        plannedDate: daqui10dIso,
+        simulateRisk: 'yellow',
+      }),
+    });
+    const jAnalyze = await rAnalyze.json();
+
+    const rSms = await fetch(`http://127.0.0.1:${port}/api/sms-responder?format=json`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        From: '+5544999874707',
+        Body: 'Posso plantar soja hoje?',
+        simular_clima: { historicalRain: 40, predictedRain: 12, soilMoisture: 52, windSpeed2m: 1.8 },
+      }),
+    });
+    const jSms = await rSms.json();
+
+    registrarResultado(
+      'Teste 24: Integração HTTP completa (/api/analyze-field + /api/sms-responder)',
+      rAnalyze.status === 200 &&
+        jAnalyze.climateScenario === 'el-nino-2023-24' &&
+        jAnalyze.operationPlan &&
+        jAnalyze.biophysModel &&
+        Array.isArray(jAnalyze.actions) &&
+        jAnalyze.actions.length === 3 &&
+        rSms.status === 200 &&
+        jSms.caracteres <= 150 &&
+        jSms.twiml.includes('<Response><Message>'),
+      `HTTP analyze=${rAnalyze.status} (${jAnalyze.risk}, plan=${jAnalyze.operationPlan?.veredito}) | SMS=${rSms.status} (${jSms.caracteres} chars)`
+    );
+  } finally {
+    srv.close();
+  }
+
+  // ============================================================================
+  // TESTE 25: SoilGrids extrai carbono orgânico (soc -> socGKg) e alimenta SOCt
+  // ============================================================================
+  const soilComSoc = processarSoilGrids({
+    properties: {
+      layers: [
+        { name: 'clay', depths: [{ values: { mean: 460 } }] },
+        { name: 'sand', depths: [{ values: { mean: 210 } }] },
+        { name: 'phh2o', depths: [{ values: { mean: 58 } }] },
+        { name: 'soc', depths: [{ values: { mean: 360 } }] },
+      ],
+    },
+  });
+  const bioComSoc = avaliarModeloBiofisicoProbabilistico(
+    { crop: 'Soja', currentRotation: 'Soja → Milho Safrinha' },
+    { predictedRain: 10, soilMoisture: 52, smapRootWetness: 54, soilGrids: soilComSoc },
+    regiaoPr,
+    { stateless: true }
+  );
+  registrarResultado(
+    'Teste 25: SoilGrids extrai carbono orgânico (socGKg) e alimenta SOCt do modelo biofísico',
+    soilComSoc !== null && soilComSoc.socGKg === 36 && bioComSoc.estadoBiofisico.carbonoOrganicoIdx >= 0.7,
+    `socGKg=${soilComSoc?.socGKg} g/kg -> SOCt=${bioComSoc.estadoBiofisico.carbonoOrganicoIdx}`
+  );
+
+  // ============================================================================
+  // TESTE 26: Persistência temporal da Memória Agrícola (Rt) por talhão
+  // ============================================================================
+  const { atualizarMemoriaAgricola, validarAssinaturaTwilio } = require('./server');
+  const talhaoTeste = { crop: 'Soja', currentRotation: 'Soja → Milho Safrinha', centroid: { lat: -24.111, lng: -52.222 } };
+  const ciclo1 = atualizarMemoriaAgricola(talhaoTeste, { predictedRain: 12 });
+  const ciclo2 = atualizarMemoriaAgricola(talhaoTeste, { predictedRain: 12 });
+  registrarResultado(
+    'Teste 26: Memória Agrícola Rt evolui e persiste entre ciclos do mesmo talhão',
+    ciclo1.ciclosRegistrados === 1 &&
+      ciclo2.ciclosRegistrados === 2 &&
+      ciclo2.residuosRres > ciclo1.residuosRres,
+    `Ciclo 1 Rres=${ciclo1.residuosRres} -> Ciclo 2 Rres=${ciclo2.residuosRres}`
+  );
+
+  // ============================================================================
+  // TESTE 27: Validação criptográfica HMAC-SHA1 X-Twilio-Signature
+  // ============================================================================
+  const crypto = require('crypto');
+  const prevToken = process.env.TWILIO_AUTH_TOKEN;
+  process.env.TWILIO_AUTH_TOKEN = 'test_token_123';
+  const urlTeste = 'https://agroshield.example.com/api/sms-responder';
+  const bodyTeste = { Body: 'Posso plantar?', From: '+5544999874707' };
+  const sigCorreta = crypto
+    .createHmac('sha1', 'test_token_123')
+    .update(`${urlTeste}BodyPosso plantar?From+5544999874707`, 'utf8')
+    .digest('base64');
+  const okSig = validarAssinaturaTwilio(
+    { headers: { 'x-twilio-signature': sigCorreta }, body: bodyTeste },
+    urlTeste
+  );
+  const badSig = validarAssinaturaTwilio(
+    { headers: { 'x-twilio-signature': 'assinatura_falsa' }, body: bodyTeste },
+    urlTeste
+  );
+  process.env.TWILIO_AUTH_TOKEN = prevToken;
+  registrarResultado(
+    'Teste 27: Validação HMAC-SHA1 (X-Twilio-Signature) aceita assinatura válida e rejeita forjada',
+    okSig === true && badSig === false,
+    `válida=${okSig} | forjada=${badSig}`
+  );
+
+  console.log('\n============================================================================');
+  console.log(`📊 RESUMO DA AUDITORIA: ${testesPassados.length} passaram | ${bugsEncontrados.length} bugs encontrados`);
+  console.log('============================================================================');
+  if (bugsEncontrados.length > 0) process.exit(1);
+})();

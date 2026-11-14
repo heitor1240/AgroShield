@@ -114,6 +114,17 @@ export interface FieldAnalysis {
   ensemble14d?: Ensemble14d | null;
   operationPlan?: OperationPlan | null;
   biophysModel?: BiophysModel | null;
+  elevation?: {
+    altitudeMediaM: number;
+    desnivelM: number;
+    declividadePct: number;
+    riscoTopografico: string;
+  } | null;
+  hourlyWindow?: {
+    melhorJanela: string;
+    horasSeguras: number;
+    resumo: string;
+  } | null;
   smsAlert?: SmsAlertLog | null;
   guidance: string;
   actions: string[];
@@ -231,23 +242,84 @@ export async function analyzeField(
   }
 }
 
+function escaparXmlSimulado(texto: string): string {
+  return texto
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+export function makeDemoSms2GResponse(
+  mensagem: string,
+  field: FieldRequest,
+  analysis?: Partial<FieldAnalysis> | null,
+): Sms2GResponse {
+  const risco: Risk = analysis?.risk ?? field.simulateRisk ?? "red";
+  const chuva = analysis?.predictedRain ?? (risco === "red" ? 68 : risco === "yellow" ? 32 : 12);
+  const vento =
+    analysis?.windSpeedKmh ?? (risco === "red" ? 14.4 : risco === "yellow" ? 11.2 : 6.5);
+  const umidade = analysis?.soilMoisture ?? (risco === "red" ? 89 : risco === "yellow" ? 72 : 54);
+  const manual = analysis?.manualSource || "EMBRAPA / IDR-Parana";
+  const regiao = analysis?.regionCode || "PR";
+
+  const operacaoTexto = /\bplant/i.test(mensagem)
+    ? "plantar"
+    : /\badub/i.test(mensagem)
+      ? "adubar"
+      : /\bcolh/i.test(mensagem)
+        ? "colher"
+        : "pulverizar";
+
+  const rawBody =
+    risco === "red"
+      ? `AGROSHIELD: NAO ${operacaoTexto} ${field.crop}. Chuva ${chuva}mm, vento ${vento}km/h e solo ${umidade}% (${manual}). Risco severo.`
+      : risco === "yellow"
+        ? `AGROSHIELD: ATENCAO para ${operacaoTexto} ${field.crop}. Chuva ${chuva}mm, vento ${vento}km/h e solo ${umidade}% (${manual}).`
+        : `AGROSHIELD: SIM, janela liberada p/ ${operacaoTexto} ${field.crop}. Chuva ${chuva}mm, vento ${vento}km/h (${manual}).`;
+
+  const respostaSms = rawBody.length > 150 ? `${rawBody.slice(0, 147).trimEnd()}...` : rawBody;
+
+  return {
+    tipo: "INBOUND_SIMULADO_FRONT_2G",
+    de: "+5544999874707",
+    pergunta_agricultor: mensagem.trim() || "STATUS",
+    regiao,
+    fonte_manual: manual,
+    risco_fisico: risco,
+    resposta_sms: respostaSms,
+    caracteres: respostaSms.length,
+    twiml: `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${escaparXmlSimulado(respostaSms)}</Message></Response>`,
+    timestamp: new Date().toISOString(),
+  };
+}
+
 export async function sendSms2GQuery(
   mensagem: string,
   field: FieldRequest,
   backendUrl = "http://localhost:3000",
+  analysis?: Partial<FieldAnalysis> | null,
 ): Promise<Sms2GResponse> {
-  const base = backendUrl.trim().replace(/\/$/, "") || "http://localhost:3000";
-  const response = await fetch(`${base}/api/sms-responder?format=json`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      From: "+5544999999999",
-      Body: mensagem,
-      crop: field.crop,
-      centroid: field.centroid,
-    }),
-    signal: AbortSignal.timeout(20000),
-  });
-  if (!response.ok) throw new Error("Falha ao consultar SMS 2G no back-end");
-  return (await response.json()) as Sms2GResponse;
+  const base = backendUrl.trim().replace(/\/$/, "");
+  if (!base) {
+    return makeDemoSms2GResponse(mensagem, field, analysis);
+  }
+  try {
+    const response = await fetch(`${base}/api/sms-responder?format=json`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        From: "+5544999874707",
+        Body: mensagem,
+        crop: field.crop,
+        centroid: field.centroid,
+      }),
+      signal: AbortSignal.timeout(20000),
+    });
+    if (!response.ok) throw new Error("Falha ao consultar SMS 2G no back-end");
+    return (await response.json()) as Sms2GResponse;
+  } catch {
+    return makeDemoSms2GResponse(mensagem, field, analysis);
+  }
 }
