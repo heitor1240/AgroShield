@@ -198,6 +198,23 @@ registrarResultado(
   `XML escapado: "${xmlEscapado}"`
 );
 
+// ----------------------------------------------------------------------------
+// TESTE 11: Metadados de limites regionais numéricos válidos (sem NaN / undefined)
+// ----------------------------------------------------------------------------
+const limitesValidos =
+  Number.isFinite(resVeto.rainLimitMm) &&
+  resVeto.rainLimitMm > 0 &&
+  Number.isFinite(resVeto.windLimitKmh) &&
+  resVeto.windLimitKmh > 0 &&
+  Number.isFinite(resVeto.windSpeedKmh) &&
+  resVeto.windSpeedKmh >= 0;
+registrarResultado(
+  'Teste 11: Limites regionais e velocidade do vento em km/h são números finitos válidos',
+  limitesValidos,
+  `rainLimitMm=${resVeto.rainLimitMm}, windLimitKmh=${resVeto.windLimitKmh}, windSpeedKmh=${resVeto.windSpeedKmh}`
+);
+
 console.log('\n============================================================================');
 console.log(`📊 RESUMO DA AUDITORIA: ${testesPassados.length} passaram | ${bugsEncontrados.length} bugs encontrados`);
 console.log('============================================================================');
+if (bugsEncontrados.length > 0) process.exit(1);

@@ -739,7 +739,7 @@ function auditarEFormatarParaFrontEnd(iaJsonBruto, fieldReq, nasaMetrics) {
     soilMoisture: Number(soilMoisture),
     windSpeedKmh: Number(ventoKmh),
     windLimitKmh: Number(regiao.limites.ventoDerivaKmh),
-    rainLimitMm: Number(regiao.limites.chuvaSaturacaoMm),
+    rainLimitMm: Number(regiao.limites.chuvaRedMm),
     regionCode: regiao.uf,
     regionName: regiao.nome,
     soilType: regiao.solo,
@@ -940,21 +940,21 @@ app.post('/api/analyze-field', async (req, res) => {
     if (simulateRisk === 'red') {
       nasaBruto = {
         historicalRain: nasaBruto.historicalRain,
-        predictedRain: Math.max(lim.chuvaSaturacaoMm + 28, Math.round(nasaBruto.historicalRain * 1.9)),
-        soilMoisture: Math.max(lim.umidadeSaturacaoPct + 7, 89),
+        predictedRain: Math.max(lim.chuvaRedMm + 28, Math.round(nasaBruto.historicalRain * 1.9)),
+        soilMoisture: Math.max(lim.umidadeRedPct + 7, 89),
         windSpeed2m: Number(((lim.ventoDerivaKmh + 14) / 3.6).toFixed(2)),
       };
     } else if (simulateRisk === 'yellow') {
       nasaBruto = {
         historicalRain: nasaBruto.historicalRain,
-        predictedRain: Math.max(18, Math.min(lim.chuvaSaturacaoMm - 6, Math.round(nasaBruto.historicalRain * 1.15))),
-        soilMoisture: Math.min(lim.umidadeSaturacaoPct - 8, 71),
+        predictedRain: Math.max(18, Math.min(lim.chuvaRedMm - 6, Math.round(nasaBruto.historicalRain * 1.15))),
+        soilMoisture: Math.min(lim.umidadeRedPct - 8, 71),
         windSpeed2m: Number(((lim.ventoDerivaKmh + 3.5) / 3.6).toFixed(2)),
       };
     } else if (simulateRisk === 'green') {
       nasaBruto = {
         historicalRain: nasaBruto.historicalRain,
-        predictedRain: Math.min(16, Math.max(8, lim.chuvaSaturacaoMm - 25)),
+        predictedRain: Math.min(16, Math.max(8, lim.chuvaRedMm - 25)),
         soilMoisture: 54,
         windSpeed2m: Number((Math.max(3, lim.ventoDerivaKmh - 4) / 3.6).toFixed(2)),
       };
@@ -1146,8 +1146,16 @@ app.post('/api/sms-responder', async (req, res) => {
       centroid: INITIAL_CENTER,
     };
 
+    const culturaDetectadaNoSms = /\bmilho\b/i.test(perguntaAgricultor)
+      ? 'Milho'
+      : /\btrigo\b/i.test(perguntaAgricultor)
+        ? 'Trigo'
+        : /\bsoja\b/i.test(perguntaAgricultor)
+          ? 'Soja'
+          : null;
+
     const fieldReq = normalizarFieldRequest({
-      crop: req.body?.crop || ultimoTalhao.crop,
+      crop: req.body?.crop || culturaDetectadaNoSms || ultimoTalhao.crop,
       currentRotation: ultimoTalhao.currentRotation,
       areaHectares: ultimoTalhao.areaHectares,
       centroid: req.body?.centroid || ultimoTalhao.centroid,
