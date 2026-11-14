@@ -372,6 +372,32 @@ registrarResultado(
   `HTML 502 => null | Válido => ${soloValido?.classeTextural} (${soloValido?.argilaPct}% argila, pH ${soloValido?.ph})`
 );
 
+// ----------------------------------------------------------------------------
+// TESTE 20: Telemetria de Solo (soilTempC, soilVolumetricM3, SoilGrids) pesa no Score de Risco
+// ----------------------------------------------------------------------------
+const scoreSoloBase = calcularPisoFisicoRegional(
+  { predictedRain: 18, soilMoisture: 55, rootZoneMoisture: 55, windSpeed2m: 2.0 },
+  limPrSoja
+);
+const scoreSoloQuenteArgiloso = calcularPisoFisicoRegional(
+  {
+    predictedRain: 18,
+    soilMoisture: 55,
+    rootZoneMoisture: 55,
+    windSpeed2m: 2.0,
+    soilTempC: 37.5,
+    soilVolumetricM3: 0.44,
+    soilGrids: { argilaPct: 48, areiaPct: 22, ph: 5.6, classeTextural: 'Solo Argiloso' },
+  },
+  limPrSoja
+);
+registrarResultado(
+  'Teste 20: Temperatura do solo (>= 35°C), umidade volumétrica e argila pesam no Score e geram alerta térmico',
+  scoreSoloQuenteArgiloso.soilThermalAlert === 'ALTO_VOLATILIZACAO' &&
+    scoreSoloQuenteArgiloso.riskScore >= scoreSoloBase.riskScore + 12,
+  `Base: ${scoreSoloBase.riskScore}/100 | Com solo 37.5°C + 0.44 m³/m³ + 48% argila: ${scoreSoloQuenteArgiloso.riskScore}/100 (${scoreSoloQuenteArgiloso.soilThermalAlert})`
+);
+
 console.log('\n============================================================================');
 console.log(`📊 RESUMO DA AUDITORIA: ${testesPassados.length} passaram | ${bugsEncontrados.length} bugs encontrados`);
 console.log('============================================================================');

@@ -930,6 +930,15 @@ function calcularPisoFisicoRegional(nasa, limites) {
   if (nasa.predictedRain >= 15 && rootZoneMoisture >= 74) {
     ptsSolo = Math.min(38, ptsSolo + 14);
   }
+  // Ajuste em tempo real pela umidade volumétrica (Open-Meteo m³/m³) e textura pedológica (SoilGrids)
+  if (typeof nasa.soilVolumetricM3 === 'number' && nasa.soilVolumetricM3 >= 0.42) {
+    ptsSolo = Math.min(38, ptsSolo + 4);
+  }
+  if (nasa.soilGrids?.argilaPct >= 45) {
+    ptsSolo = Math.min(38, ptsSolo + 4);
+  } else if (nasa.soilGrids?.areiaPct >= 65) {
+    ptsSolo = Math.max(0, ptsSolo - 3);
+  }
 
   // 3. Sub-score Vento / Deriva (0 a 25 pts)
   let ptsVento = Math.min(25, (ventoKmh / Math.max(1, limites.ventoRedKmh)) * 25);
@@ -937,7 +946,20 @@ function calcularPisoFisicoRegional(nasa, limites) {
     ptsVento = 15;
   }
 
-  let riskScore = Math.min(100, Math.max(0, Math.round(ptsChuva + ptsSolo + ptsVento)));
+  // 4. Alerta térmico do solo (Open-Meteo soil_temperature_0cm)
+  let soilThermalAlert = null;
+  let ptsTermico = 0;
+  if (typeof nasa.soilTempC === 'number') {
+    if (nasa.soilTempC >= 35) {
+      soilThermalAlert = 'ALTO_VOLATILIZACAO';
+      ptsTermico = 6;
+    } else if (nasa.soilTempC < 15) {
+      soilThermalAlert = 'SOLO_FRIO';
+      ptsTermico = 3;
+    }
+  }
+
+  let riskScore = Math.min(100, Math.max(0, Math.round(ptsChuva + ptsSolo + ptsVento + ptsTermico)));
 
   let minPhysicalRisk = 'green';
   if (
@@ -960,7 +982,7 @@ function calcularPisoFisicoRegional(nasa, limites) {
     if (riskScore < 45) riskScore = 45;
   }
 
-  return { minPhysicalRisk, ventoKmh, rootZoneMoisture, riskScore };
+  return { minPhysicalRisk, ventoKmh, rootZoneMoisture, riskScore, soilThermalAlert };
 }
 
 const anthropic = new Anthropic({
@@ -996,6 +1018,8 @@ function contemNumeroAlucinado(texto, nasaMetrics, limites, ventoKmh) {
     nasaMetrics.soilMoisture,
     nasaMetrics.rootZoneMoisture,
     nasaMetrics.riskScore,
+    nasaMetrics.soilGrids?.argilaPct,
+    nasaMetrics.soilGrids?.areiaPct,
     limites.umidadeRedPct,
     limites.umidadeRedPct - 10,
     limites.umidadeRedPct - 8,
@@ -1253,6 +1277,9 @@ O array "actions" DEVE ter exatamente 3 strings.`;
 - Pico de chuva recente (PRECTOTCORR): ${nasaMetrics.predictedRain} mm
 - Umidade superficial do solo (GWETTOP): ${nasaMetrics.soilMoisture}%
 - Umidade na zona das raízes / NASA SMAP (GWETROOT): ${nasaMetrics.rootZoneMoisture ?? nasaMetrics.soilMoisture}%
+${typeof nasaMetrics.soilTempC === 'number' ? `- Temperatura superficial do solo (0cm): ${nasaMetrics.soilTempC}°C${nasaMetrics.soilThermalAlert === 'ALTO_VOLATILIZACAO' ? ' (ALERTA: >= 35°C, alto risco de volatilização de herbicida e estresse na germinação)' : nasaMetrics.soilThermalAlert === 'SOLO_FRIO' ? ' (ALERTA: < 15°C, emergência lenta na semeadura)' : ''}` : ''}
+${typeof nasaMetrics.soilVolumetricM3 === 'number' ? `- Umidade volumétrica em tempo real (0-1cm): ${nasaMetrics.soilVolumetricM3} m³/m³` : ''}
+${nasaMetrics.soilGrids ? `- Perfil pedológico SoilGrids: ${nasaMetrics.soilGrids.classeTextural} (${nasaMetrics.soilGrids.argilaPct}% argila, pH ${nasaMetrics.soilGrids.ph})` : ''}
 - Pico de vento a 2m (WS2M): ${ventoKmh} km/h (${nasaMetrics.windSpeed2m} m/s)
 ${nasaMetrics.markov ? `- Tendência Estocástica (Cadeia de Markov): ${nasaMetrics.markov.resumo}` : ''}
 ${nasaMetrics.ensemble14d ? `- Horizonte Semana 2 (APENAS referência futura dias 8-14, NÃO altera o alerta de hoje): ${nasaMetrics.ensemble14d.resumo}` : ''}
