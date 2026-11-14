@@ -187,3 +187,5 @@ h1 { font-size: 30px; line-height: 1.3; font-weight: 800; margin: 8px 0; }
 .sms-reply-header { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-size: 11px; margin-bottom: 8px; flex-wrap: wrap; }
 .sms-reply-bubble { margin: 0; padding: 12px 14px; border-radius: 6px; background: var(--card); border: 1px solid var(--border); font-family: monospace; font-size: 12px; font-weight: 700; color: var(--foreground); }
 .sms-twiml-code { margin: 10px 0 0; padding: 10px 12px; border-radius: 5px; background: var(--map-ink); color: var(--primary-foreground); font-size: 10px; overflow-x: auto; white-space: pre-wrap; word-break: break-all; }
+.markov-strip { margin-top: 14px; padding: 10px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--secondary); font-size: 11px; line-height: 1.5; display: flex; flex-direction: column; gap: 2px; }
+.markov-strip strong { color: var(--primary); font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px; }

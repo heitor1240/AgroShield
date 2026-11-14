@@ -13,6 +13,7 @@ const {
   calcularPisoFisicoRegional,
   auditarSms2GContraFisica,
   escaparXmlTwiml,
+  calcularTendenciaMarkov,
 } = require('./server');
 
 function isAnalysisFrontEndValidator(v) {
@@ -254,6 +255,27 @@ registrarResultado(
   'Teste 13: Auditor Numérico bloqueia números inventados pela IA no SMS 2G Offline',
   !smsNumeroInventado.includes('300') && !smsNumeroInventado.includes('88'),
   `SMS corrigido com números reais: "${smsNumeroInventado}"`
+);
+
+// ----------------------------------------------------------------------------
+// TESTE 14: Cadeia de Markov (tendência 3d/7d sobre série diária NASA POWER)
+// ----------------------------------------------------------------------------
+const serieSimulada = { PRECTOTCORR: {}, GWETTOP: {}, WS2M: {} };
+for (let i = 1; i <= 20; i++) {
+  const dia = `202610${String(i).padStart(2, '0')}`;
+  serieSimulada.PRECTOTCORR[dia] = i % 5 === 0 ? 35 : 0;
+  serieSimulada.GWETTOP[dia] = i % 5 === 0 ? 0.85 : 0.45;
+  serieSimulada.WS2M[dia] = 2.0;
+}
+const markovRes = calcularTendenciaMarkov(serieSimulada);
+registrarResultado(
+  'Teste 14: Cadeia de Markov calcula probabilidades válidas (0..100%) sobre série da NASA',
+  markovRes.diasAnalisados === 20 &&
+    markovRes.janelaSeca3dPct >= 0 &&
+    markovRes.janelaSeca3dPct <= 100 &&
+    markovRes.persistenciaRisco7dPct >= 0 &&
+    markovRes.persistenciaRisco7dPct <= 100,
+  markovRes.resumo
 );
 
 console.log('\n============================================================================');

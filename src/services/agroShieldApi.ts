@@ -28,6 +28,13 @@ export interface Sms2GResponse {
   twiml: string;
   timestamp: string;
 }
+export interface MarkovTrend {
+  estadoAtual: 'SECO' | 'MODERADO' | 'CRITICO';
+  diasAnalisados: number;
+  janelaSeca3dPct: number;
+  persistenciaRisco7dPct: number;
+  resumo: string;
+}
 export interface FieldAnalysis {
   risk: Risk;
   historicalRain: number;
@@ -41,6 +48,7 @@ export interface FieldAnalysis {
   soilType?: string;
   manualSource?: string;
   dataSources?: string;
+  markov?: MarkovTrend | null;
   smsAlert?: SmsAlertLog | null;
   guidance: string;
   actions: string[];

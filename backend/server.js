@@ -259,6 +259,92 @@ async function buscarOpenMeteoTempoReal(lat, lng) {
   }
 }
 
+/**
+ * Modelo Estocástico de Cadeia de Markov (3 estados: SECO, MODERADO, CRITICO)
+ * sobre a série histórica recente da NASA POWER (até 60 dias) para estimar:
+ * - Probabilidade de janela seca operacional em 3 dias
+ * - Persistência de risco climático/solo úmido em 7 dias
+ */
+function calcularTendenciaMarkov(paramDaily) {
+  const precMap = paramDaily?.PRECTOTCORR || {};
+  const umidMap = paramDaily?.GWETTOP || {};
+  const ventoMap = paramDaily?.WS2M || {};
+
+  const datasOrdenadas = Object.keys(precMap).sort();
+  const estados = [];
+
+  for (const dia of datasOrdenadas) {
+    const chuva = precMap[dia];
+    if (typeof chuva !== 'number' || chuva < 0 || chuva > 600) continue;
+
+    const umid = umidMap[dia];
+    const vento = ventoMap[dia];
+    const umidValida = typeof umid === 'number' && umid >= 0 && umid <= 1 ? umid : 0.5;
+    const ventoValido = typeof vento === 'number' && vento >= 0 && vento <= 60 ? vento : 2.0;
+
+    if (chuva >= 25 || umidValida >= 0.8 || ventoValido >= 5.0) {
+      estados.push(2); // CRITICO
+    } else if (chuva >= 5 || umidValida >= 0.7 || ventoValido > 2.7) {
+      estados.push(1); // MODERADO
+    } else {
+      estados.push(0); // SECO
+    }
+  }
+
+  if (estados.length < 5) {
+    return {
+      estadoAtual: 'MODERADO',
+      diasAnalisados: estados.length,
+      janelaSeca3dPct: 45,
+      persistenciaRisco7dPct: 55,
+      resumo: 'Série curta da NASA: tendência estocástica neutra (45% janela seca em 3d).',
+    };
+  }
+
+  // Matriz de transição 3x3 com suavização de Laplace (+0.5)
+  const contagens = [
+    [0.5, 0.5, 0.5],
+    [0.5, 0.5, 0.5],
+    [0.5, 0.5, 0.5],
+  ];
+  for (let i = 0; i < estados.length - 1; i++) {
+    contagens[estados[i]][estados[i + 1]] += 1;
+  }
+
+  const P = contagens.map((linha) => {
+    const soma = linha.reduce((a, b) => a + b, 0);
+    return linha.map((v) => v / soma);
+  });
+
+  const multiplicarVetorMatriz = (vec, mat) => [
+    vec[0] * mat[0][0] + vec[1] * mat[1][0] + vec[2] * mat[2][0],
+    vec[0] * mat[0][1] + vec[1] * mat[1][1] + vec[2] * mat[2][1],
+    vec[0] * mat[0][2] + vec[1] * mat[1][2] + vec[2] * mat[2][2],
+  ];
+
+  const estadoIdx = estados[estados.length - 1];
+  const nomesEstados = ['SECO', 'MODERADO', 'CRITICO'];
+  let dist = [0, 0, 0];
+  dist[estadoIdx] = 1;
+
+  let dist3d = dist;
+  for (let d = 0; d < 3; d++) dist3d = multiplicarVetorMatriz(dist3d, P);
+
+  let dist7d = dist3d;
+  for (let d = 3; d < 7; d++) dist7d = multiplicarVetorMatriz(dist7d, P);
+
+  const janelaSeca3dPct = Math.round(dist3d[0] * 100);
+  const persistenciaRisco7dPct = Math.round((dist7d[1] + dist7d[2]) * 100);
+
+  return {
+    estadoAtual: nomesEstados[estadoIdx],
+    diasAnalisados: estados.length,
+    janelaSeca3dPct,
+    persistenciaRisco7dPct,
+    resumo: `Cadeia de Markov (${estados.length} dias NASA): ${janelaSeca3dPct}% de chance de janela seca em 3 dias; ${persistenciaRisco7dPct}% de risco climático persistente em 7 dias.`,
+  };
+}
+
 async function buscarDadosNasaParaFrontEnd(lat, lng) {
   const chaveCoord = `${Number(lat).toFixed(2)}_${Number(lng).toFixed(2)}`;
   if (cacheNasaPorCoordenada.has(chaveCoord)) {
@@ -268,7 +354,8 @@ async function buscarDadosNasaParaFrontEnd(lat, lng) {
   try {
     const agora = new Date();
     const dataFim = agora.toISOString().slice(0, 10).replace(/-/g, '');
-    const dataInicio = new Date(agora.getTime() - 10 * 24 * 60 * 60 * 1000)
+    // Janela de 60 dias na mesma chamada HTTP da NASA POWER para alimentar a Cadeia de Markov
+    const dataInicio = new Date(agora.getTime() - 60 * 24 * 60 * 60 * 1000)
       .toISOString()
       .slice(0, 10)
       .replace(/-/g, '');
@@ -301,16 +388,19 @@ async function buscarDadosNasaParaFrontEnd(lat, lng) {
 
     const paramDaily = resDaily?.data?.properties?.parameter || {};
 
-    // Filtra flags -999 (dias ainda não processados pelo satélite)
-    const chuvasValidas = Object.values(paramDaily.PRECTOTCORR || {}).filter(
-      (v) => typeof v === 'number' && v >= 0 && v <= 600
-    );
-    const umidadesValidas = Object.values(paramDaily.GWETTOP || {}).filter(
-      (v) => typeof v === 'number' && v >= 0 && v <= 1
-    );
-    const ventosValidos = Object.values(paramDaily.WS2M || {}).filter(
-      (v) => typeof v === 'number' && v >= 0 && v <= 60
-    );
+    // Calcula tendência estocástica de 3d e 7d via Cadeia de Markov usando toda a janela de 60 dias
+    const markov = calcularTendenciaMarkov(paramDaily);
+
+    // Filtra flags -999 e usa APENAS os últimos 10 dias válidos para o cálculo do risco imediato atual
+    const chuvasValidas = Object.values(paramDaily.PRECTOTCORR || {})
+      .filter((v) => typeof v === 'number' && v >= 0 && v <= 600)
+      .slice(-10);
+    const umidadesValidas = Object.values(paramDaily.GWETTOP || {})
+      .filter((v) => typeof v === 'number' && v >= 0 && v <= 1)
+      .slice(-10);
+    const ventosValidos = Object.values(paramDaily.WS2M || {})
+      .filter((v) => typeof v === 'number' && v >= 0 && v <= 60)
+      .slice(-10);
 
     if (chuvasValidas.length === 0) {
       throw new Error('Sem leituras válidas de precipitação na janela recente da NASA.');
@@ -356,6 +446,7 @@ async function buscarDadosNasaParaFrontEnd(lat, lng) {
       soilMoisture,
       windSpeed2m,
       minPhysicalRisk,
+      markov,
       nasaLive: true,
       openMeteoLive: Boolean(openMeteo),
       dataSources: openMeteo
@@ -857,6 +948,7 @@ function auditarEFormatarParaFrontEnd(iaJsonBruto, fieldReq, nasaMetrics) {
     soilType: regiao.solo,
     manualSource: regiao.fonte,
     dataSources: nasaMetrics.dataSources || 'NASA POWER',
+    markov: nasaMetrics.markov || null,
     guidance,
     actions,
     technicalReason,
@@ -953,6 +1045,7 @@ O array "actions" DEVE ter exatamente 3 strings.`;
 - Pico de chuva recente (PRECTOTCORR): ${nasaMetrics.predictedRain} mm
 - Umidade superficial do solo (GWETTOP): ${nasaMetrics.soilMoisture}%
 - Pico de vento a 2m (WS2M): ${ventoKmh} km/h (${nasaMetrics.windSpeed2m} m/s)
+${nasaMetrics.markov ? `- Tendência Estocástica (Cadeia de Markov): ${nasaMetrics.markov.resumo}` : ''}
 
 ⚖️ PISO FÍSICO CALCULADO PELO CÓDIGO: "${nasaMetrics.minPhysicalRisk}"
 
@@ -1437,4 +1530,5 @@ module.exports = {
   auditarSms2GContraFisica,
   escaparXmlTwiml,
   contemNumeroAlucinado,
+  calcularTendenciaMarkov,
 };
