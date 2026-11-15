@@ -43,6 +43,7 @@ describe("Analysis contract", () => {
   it("works without a configured backend and clearly marks the demo", async () => {
     const result = await analyzeField(payload);
     expect(result.source).toBe("demo");
+    expect(result.risk).toBe("yellow");
     expect(result.actions).toHaveLength(3);
   });
   it("posts all field inputs to /api/analyze-field", async () => {
@@ -81,11 +82,24 @@ describe("Orbital field layers", () => {
       isDemo: false,
     });
     expect(getFieldLayerView(analysis, "soil-moisture")).toMatchObject({
-      buttonValue: "78%",
+      buttonValue: "68%",
       isDemo: true,
     });
     expect(getFieldLayerView(analysis, "heat").source).toContain("Demonstrativo");
     expect(getFieldLayerView(analysis, "cover").source).toContain("Demonstrativo");
+  });
+
+  it("provides four correctly labeled orbital layers with ideal-zone progress", () => {
+    const analysis = makeDemoAnalysis();
+    expect(getFieldLayerView(analysis, "ndvi")).toMatchObject({
+      buttonValue: "0.84 · 84%",
+      status: "Vigor vegetativo alto",
+      isDemo: true,
+      progress: { value: 84, max: 100, idealStart: 70, idealEnd: 92 },
+    });
+    expect(getFieldLayerView(analysis, "soil-moisture").buttonValue).toBe("68%");
+    expect(getFieldLayerView(analysis, "heat").buttonValue).toBe("32,1°C");
+    expect(getFieldLayerView(analysis, "cover").buttonValue).toBe("42%");
   });
 
   it("uses measurements supplied by the analysis API", () => {
@@ -111,8 +125,11 @@ describe("Orbital field layers", () => {
     expect(
       getFieldLayerView(analysis, "rain-heatmap", {
         temperatureC: 21.7,
+        relativeHumidityPct: 83,
+        maxTemperatureTodayC: 28.1,
         precipitationTodayMm: 0.4,
         time: "2026-11-15T08:45",
+        hourlyForecast: [],
       }),
     ).toMatchObject({
       buttonLabel: "Chuva hoje",

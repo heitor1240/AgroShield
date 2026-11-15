@@ -11,7 +11,6 @@ import {
   LockKeyhole,
   Pentagon,
   Radio,
-  RotateCcw,
   Satellite,
   ShieldCheck,
   Sprout,
@@ -21,6 +20,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import AnalysisDashboard from "@/components/AnalysisDashboard";
+import FieldWeatherSnapshot from "@/components/FieldWeatherSnapshot";
 import {
   calculateField,
   EXAMPLE_FIELD,
@@ -45,7 +45,7 @@ const rotations = ["Soja → Milho Safrinha", "Monocultura de Soja", "Soja → T
 const plannedOperations: PlannedOperation[] = ["Pulverizar", "Plantar", "Adubar", "Colher"];
 const checks = [
   "Extraindo centroide e coordenadas do polígono...",
-  "Consultando satélites NASA GPM & POWER (Precipitação e Umidade)...",
+  "Consultando precipitação e umidade na fonte configurada...",
   "Cruzando anomalias climáticas do El Niño...",
   "Gerando orientação tática e estratégias de rotação via IA...",
 ];
@@ -105,10 +105,16 @@ function Index() {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileExpanded, setMobileExpanded] = useState(false);
   const [layoutVersion, setLayoutVersion] = useState(0);
-  const [activeMapLayer, setActiveMapLayer] = useState<FieldMapLayer>("alert");
+  const [activeMapLayer, setActiveMapLayer] = useState<FieldMapLayer>("ndvi");
   const sidebarRef = useRef<HTMLElement>(null);
   const runId = useRef(0);
   const field = calculateField(points);
+  const connectionState =
+    step === 3 && result?.source === "api"
+      ? "live"
+      : step === 3 || !backendUrl
+        ? "demo"
+        : "configured";
   const renderFieldMap = (analysis: FieldAnalysis | null, showSearch: boolean) => (
     <ClientOnly fallback={<div className="field-map" />}>
       <Suspense fallback={<div className="field-map" />}>
@@ -164,7 +170,7 @@ function Index() {
     };
     setRequest(payload);
     setProgress(0);
-    setActiveMapLayer("alert");
+    setActiveMapLayer("ndvi");
     setStep(2);
     const [response] = await Promise.all([
       analyzeField(payload, backendUrl),
@@ -200,7 +206,7 @@ function Index() {
     setDrawing(false);
     setCenter(INITIAL_CENTER);
     setMobileExpanded(false);
-    setActiveMapLayer("alert");
+    setActiveMapLayer("ndvi");
   }
 
   function saveConnection(event: React.FormEvent) {
@@ -233,18 +239,17 @@ function Index() {
           <div className="loading-fill" style={{ height: `${progress}%` }} aria-hidden="true" />
         </>
       )}
-      {step !== 3 && (
-        <div className={step === 2 ? "map-under-loading" : undefined}>
-          <div className="map-app-map" aria-label="Mapa de satélite interativo">
-            {renderFieldMap(null, true)}
-          </div>
+      <div className={step === 2 ? "map-under-loading" : undefined}>
+        <div className="map-app-map" aria-label="Mapa de satélite interativo">
+          {renderFieldMap(step === 3 ? result : null, step === 1)}
         </div>
-      )}
+      </div>
       {step === 1 && (
         <div className="map-toolbar" aria-label="Ferramentas do mapa">
           <Button
             variant={drawing ? "default" : "outline"}
             size="sm"
+            data-drawing={drawing}
             disabled={drawing && points.length < 3}
             onClick={() => {
               if (drawing) setDrawing(false);
@@ -276,7 +281,7 @@ function Index() {
               setCenter(INITIAL_CENTER);
             }}
           >
-            Usar Exemplo
+            Usar Talhão Exemplo
           </Button>
         </div>
       )}
@@ -321,14 +326,20 @@ function Index() {
           </div>
           <Button
             variant="outline"
-            className="connection-badge"
+            className={`connection-badge is-${connectionState}`}
             onClick={() => {
               setUrlDraft(backendUrl);
               setConnectionOpen(true);
             }}
           >
             <span className="live-dot" />{" "}
-            {backendUrl ? "API · NASA POWER / GPM" : "DEMO · NASA POWER / GPM"}{" "}
+            {step === 3
+              ? result?.source === "demo"
+                ? "DEMO · DADOS SIMULADOS"
+                : "API · RESULTADO DO BACK-END"
+              : backendUrl
+                ? "API CONFIGURADA"
+                : "DEMO · DADOS SIMULADOS"}{" "}
             <ChevronDown size={14} />
           </Button>
         </header>
@@ -342,6 +353,7 @@ function Index() {
                   <h1>Seu campo, em foco.</h1>
                   <p>Delimite a área no mapa e prepare sua análise.</p>
                 </div>
+                <FieldWeatherSnapshot weather={currentWeather} />
                 <div className="area-strip sidebar-area">
                   <Pentagon size={21} />
                   <div>
@@ -478,7 +490,7 @@ function Index() {
                   disabled={!field || drawing || field.areaHectares <= 0}
                   onClick={activate}
                 >
-                  <Satellite size={17} /> Analisar Talhão com Dados NASA <ArrowRight size={16} />
+                  <Satellite size={17} /> Analisar Talhão <ArrowRight size={16} />
                 </Button>
                 <p className="activation-note">
                   <LockKeyhole size={10} className="inline mr-1" />
@@ -504,6 +516,7 @@ function Index() {
                 <span className="eyebrow">VIGIA ESPACIAL ATIVADA</span>
                 <h1>Analisando seu talhão</h1>
                 <p>O mapa está enquadrando a área selecionada.</p>
+                <FieldWeatherSnapshot weather={currentWeather} />
                 <progress max={100} value={progress} />
                 <div className="progress-caption">
                   <span>{backendUrl ? "Processamento da análise" : "Simulação demonstrativa"}</span>
@@ -541,26 +554,20 @@ function Index() {
                 activeLayer={activeMapLayer}
                 onLayerChange={setActiveMapLayer}
                 currentWeather={currentWeather}
-                mapWindow={
-                  <section className="analysis-map-window" aria-label="Mapa do talhão">
-                    <header className="analysis-map-header">
-                      <div>
-                        <span className="eyebrow">JANELA ESPACIAL</span>
-                        <h2>Mapa de satélite</h2>
-                      </div>
-                      <span>
-                        {formatNumber(request.areaHectares)} ha · {request.crop}
-                      </span>
-                    </header>
-                    <div className="analysis-map-canvas">{renderFieldMap(result, false)}</div>
-                  </section>
-                }
+                mapWindow={null}
               />
             )}
             <footer className="sidebar-legal">
               AgroShield © 2026 · Field Shift{" "}
               <span>
-                <Radio size={11} /> {backendUrl ? "API externa" : "Demonstração · dados simulados"}
+                <Radio size={11} />{" "}
+                {step !== 3
+                  ? backendUrl
+                    ? "API configurada · aguarda análise"
+                    : "Demonstração · valores simulados"
+                  : result?.source === "demo"
+                    ? "Cenário demonstrativo · valores simulados"
+                    : "Resposta da API · verificar fontes"}
               </span>
             </footer>
           </div>
@@ -569,7 +576,7 @@ function Index() {
         {!collapsed && step === 3 && result && (
           <footer className="sidebar-result-footer">
             <Button variant="outline" size="action" onClick={reset}>
-              <RotateCcw /> Editar Talhão / Nova Análise
+              ← Redesenhar Talhão
             </Button>
             <div className="scenario-control">
               <span>Simular risco</span>

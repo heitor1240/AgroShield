@@ -147,7 +147,7 @@ export interface FieldAnalysis {
   source: "demo" | "api";
   fallbackReason?: string;
 }
-export function makeDemoAnalysis(risk: Risk = "red"): FieldAnalysis {
+export function makeDemoAnalysis(risk: Risk = "yellow"): FieldAnalysis {
   const common = {
     risk,
     historicalRain: 32,
@@ -250,7 +250,7 @@ export async function analyzeField(
     return { ...result, source: "api" };
   } catch {
     return {
-      ...makeDemoAnalysis(data.simulateRisk ?? "red"),
+      ...makeDemoAnalysis(data.simulateRisk ?? "yellow"),
       fallbackReason:
         "Não foi possível acessar a API. Exibindo um cenário demonstrativo, sem dados ao vivo.",
     };

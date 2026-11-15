@@ -17,9 +17,13 @@ import {
   LoaderCircle,
   Thermometer,
   FileDown,
+  CalendarDays,
+  MapPin,
+  Clock3,
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { Button } from "@/components/ui/button";
+import FieldWeatherSnapshot from "@/components/FieldWeatherSnapshot";
 import { formatNumber } from "@/lib/field";
 import { getFieldLayerView, type FieldMapLayer } from "@/lib/field-layers";
 import {
@@ -29,6 +33,58 @@ import {
   type Sms2GResponse,
 } from "@/services/agroShieldApi";
 import type { CurrentWeather } from "@/services/fieldWeather";
+
+interface WeatherWindow {
+  minTemperatureC: number;
+  maxTemperatureC: number;
+  firstTemperatureC: number;
+  lastTemperatureC: number;
+  minHumidityPct: number | null;
+  maxHumidityPct: number | null;
+}
+
+function getWeatherWindow(
+  weather: CurrentWeather | null,
+  startHour: number,
+  endHour: number,
+): WeatherWindow | null {
+  if (!weather) return null;
+  const readings = weather.hourlyForecast.filter((reading) => {
+    const hour = Number(reading.time.slice(11, 13));
+    return hour >= startHour && hour <= endHour;
+  });
+  if (readings.length === 0) return null;
+  const temperatures = readings.map((reading) => reading.temperatureC);
+  const humidities = readings
+    .map((reading) => reading.relativeHumidityPct)
+    .filter((humidity): humidity is number => humidity !== null);
+  return {
+    minTemperatureC: Math.min(...temperatures),
+    maxTemperatureC: Math.max(...temperatures),
+    firstTemperatureC: readings[0]?.temperatureC ?? temperatures[0] ?? 0,
+    lastTemperatureC: readings[readings.length - 1]?.temperatureC ?? temperatures[0] ?? 0,
+    minHumidityPct: humidities.length ? Math.min(...humidities) : null,
+    maxHumidityPct: humidities.length ? Math.max(...humidities) : null,
+  };
+}
+
+function formatTemperature(value: number) {
+  return `${formatNumber(value)}°C`;
+}
+
+function formatTemperatureWindow(window: WeatherWindow | null, trend = false) {
+  if (!window) return "Previsão horária indisponível";
+  return trend
+    ? `${formatTemperature(window.firstTemperatureC)} → ${formatTemperature(window.lastTemperatureC)}`
+    : `${formatTemperature(window.minTemperatureC)}–${formatTemperature(window.maxTemperatureC)}`;
+}
+
+function formatHumidityWindow(window: WeatherWindow | null) {
+  if (!window || window.minHumidityPct === null || window.maxHumidityPct === null) {
+    return "Umidade horária indisponível";
+  }
+  return `UR ${formatNumber(window.minHumidityPct)}–${formatNumber(window.maxHumidityPct)}%`;
+}
 
 export default function AnalysisDashboard({
   field,
@@ -58,16 +114,22 @@ export default function AnalysisDashboard({
   const [smsLoading, setSmsLoading] = useState(false);
   const [smsReply, setSmsReply] = useState<Sms2GResponse | null>(null);
   const [showTwiml, setShowTwiml] = useState(false);
+  const [selectedStrategy, setSelectedStrategy] = useState("Soja → Milho + Braquiária");
   useEffect(() => {
     setAnalysis(initial);
     setDone([]);
   }, [initial]);
+  const dailyMaximum =
+    currentWeather?.maxTemperatureTodayC === null ||
+    currentWeather?.maxTemperatureTodayC === undefined
+      ? ""
+      : ` (MÁX. ${formatTemperature(currentWeather.maxTemperatureTodayC)} PREVISTA HOJE · OPEN-METEO)`;
   const label =
     analysis.risk === "red"
-      ? "PERIGO SEVERO"
+      ? `VERMELHO — RISCO DE LIXIVIAÇÃO E ATOLAMENTO${dailyMaximum}`
       : analysis.risk === "yellow"
-        ? "ATENÇÃO"
-        : "OPERAÇÃO NORMAL";
+        ? `AMARELO — ATENÇÃO TÉRMICA E OPERACIONAL${dailyMaximum}`
+        : `VERDE — CONDIÇÕES FAVORÁVEIS${dailyMaximum}`;
   const climateLabel =
     field.climateScenario === "el-nino-2023-24"
       ? "El Niño 2023/24"
@@ -76,9 +138,9 @@ export default function AnalysisDashboard({
         : "Clima atual";
   const strategies = [
     {
-      title: field.currentRotation,
+      title: "Soja → Milho Solteiro",
       tag: "ROTAÇÃO ATUAL",
-      score: 45,
+      score: 46,
       benefit: "Mantém o calendário produtivo e a renda da segunda safra.",
       risk: "Menor cobertura pode aumentar erosão e lixiviação.",
       limit: "Satélites não identificam compactação nem palhada no talhão.",
@@ -86,43 +148,83 @@ export default function AnalysisDashboard({
     {
       title: "Soja → Milho + Braquiária",
       tag: "MAIS RESILIENTE",
-      score: 88,
-      benefit: "Palhada protege o solo, reduz perda de nutrientes e melhora o tráfego de máquinas.",
+      score: 89,
+      benefit: "Eleva a palhada para até 85%, conserva umidade na seca e protege o solo nas chuvas.",
       risk: "Exige manejo do consórcio e controle da competição por água.",
       limit: "Não informa fertilidade nem a viabilidade local do consórcio.",
     },
     {
       title: "Soja → Aveia Preta / Trigo",
       tag: "ESTRATÉGIA ALTERNATIVA",
-      score: 82,
-      benefit: "Cobertura rápida e raízes favorecem a infiltração da água.",
+      score: 81,
+      benefit: "Foco em proteção rápida do solo e controle de plantas daninhas.",
       risk: "Depende da janela de semeadura e do risco de geadas.",
       limit: "A resolução orbital não capta microclimas ou geadas pontuais.",
     },
   ];
   const layerButtons = [
-    { id: "alert", Icon: AlertTriangle },
-    { id: "rain-heatmap", Icon: CloudRain },
+    { id: "ndvi", Icon: Sprout },
     { id: "soil-moisture", Icon: Droplets },
     { id: "heat", Icon: Thermometer },
     { id: "cover", Icon: ShieldCheck },
   ] as const;
   const activeLayerView = getFieldLayerView(analysis, activeLayer, currentWeather);
-  const displayedRain = currentWeather?.precipitationTodayMm ?? analysis.predictedRain;
+  const isDemo = analysis.source === "demo";
+  const displayedSoilMoisture = isDemo ? 68 : analysis.soilMoisture;
+  const todayLabel = new Intl.DateTimeFormat("pt-BR", {
+    day: "2-digit",
+    month: "long",
+    year: "numeric",
+    timeZone: "America/Sao_Paulo",
+  }).format(new Date());
+  const displayedRain = currentWeather?.precipitationTodayMm ?? null;
   const displayedRainText = currentWeather
     ? formatNumber(currentWeather.precipitationTodayMm)
-    : String(analysis.predictedRain);
+    : "—";
   const displayedRainLabel = currentWeather
     ? "Precipitação estimada hoje · Open-Meteo"
-    : analysis.source === "demo"
-      ? "Previsão demonstrativa (24h)"
-      : "Chuva prevista (24h)";
-  const displayedDemoWeatherContext =
-    currentWeather && analysis.source === "demo"
-      ? `Este alerta é demonstrativo, não uma previsão ao vivo. A precipitação acumulada estimada hoje em Campo Mourão é ${displayedRainText} mm até ${currentWeather.time.slice(11, 16)} (Open-Meteo; modelo meteorológico, não leitura de pluviômetro).`
-      : null;
+    : "Acumulado de hoje indisponível";
+  const weatherWindows = {
+    morning: getWeatherWindow(currentWeather, 6, 10),
+    afternoon: getWeatherWindow(currentWeather, 11, 16),
+    evening: getWeatherWindow(currentWeather, 17, 22),
+  };
+  const morningThermalStatus = weatherWindows.morning
+    ? weatherWindows.morning.maxTemperatureC > 30
+      ? "PAUSAR · LIMITE TÉRMICO >30°C"
+      : "FAIXA TÉRMICA FAVORÁVEL"
+    : "PREVISÃO HORÁRIA INDISPONÍVEL";
+  const afternoonThermalStatus = weatherWindows.afternoon
+    ? weatherWindows.afternoon.maxTemperatureC > 30
+      ? "PAUSAR · LIMITE TÉRMICO >30°C"
+      : "SEM BLOQUEIO TÉRMICO PREVISTO"
+    : "PREVISÃO HORÁRIA INDISPONÍVEL";
+  const eveningThermalStatus = weatherWindows.evening
+    ? weatherWindows.evening.maxTemperatureC > 30
+      ? "PAUSAR · LIMITE TÉRMICO >30°C"
+      : "TEMPERATURA EM QUEDA / FAIXA FAVORÁVEL"
+    : "PREVISÃO HORÁRIA INDISPONÍVEL";
+  const displayedDemoWeatherContext = isDemo
+    ? `O alerta agronômico é demonstrativo, não uma ordem de campo. ${currentWeather ? `Open-Meteo estima agora ${formatTemperature(currentWeather.temperatureC)} e máxima diária de ${currentWeather.maxTemperatureTodayC === null ? "indisponível" : formatTemperature(currentWeather.maxTemperatureTodayC)}; precipitação acumulada estimada ${displayedRainText} mm até ${currentWeather.time.slice(11, 16)}. ${currentWeather.maxTemperatureTodayC !== null && currentWeather.maxTemperatureTodayC <= 30 ? "O modelo não prevê ultrapassar 30°C; isso não libera pulverização sem confirmar vento, ΔT, umidade e bula do produto." : "Reavalie a pulverização nos horários em que a previsão exceder 30°C e confirme vento, ΔT, umidade e bula do produto."} São dados de modelo regional, não observação no talhão.` : "Não há telemetria meteorológica atual disponível; confirme as condições locais antes de qualquer operação."}`
+    : null;
   const displayedGuidance = displayedDemoWeatherContext ?? analysis.guidance;
   const displayedTechnicalReason = displayedDemoWeatherContext ?? analysis.technicalReason;
+  const windBlocked =
+    typeof analysis.windSpeedKmh === "number" &&
+    typeof analysis.windLimitKmh === "number" &&
+    analysis.windSpeedKmh > analysis.windLimitKmh;
+  const afternoonBlocked =
+    weatherWindows.afternoon?.maxTemperatureC !== undefined &&
+    weatherWindows.afternoon.maxTemperatureC > 30;
+  const afternoonDetail = windBlocked
+    ? `Vento ${analysis.windSpeedKmh} km/h · limite ${analysis.windLimitKmh} km/h`
+    : analysis.deltaTStatus === "EVAPORACAO_ALTA"
+      ? `ΔT ${analysis.deltaT}°C · evaporação elevada`
+      : `${formatHumidityWindow(weatherWindows.afternoon)} · validar vento, ΔT e bula`;
+  const trafficAttention = displayedSoilMoisture >= 65;
+  const trafficDetail = trafficAttention
+    ? `Umidade ${displayedSoilMoisture}% · atenção em baixadas; confirme suporte do solo antes de tráfego`
+    : `Umidade ${displayedSoilMoisture}% · confirme trafegabilidade por vistoria local`;
 
   async function handleSendSms2G(event: React.FormEvent) {
     event.preventDefault();
@@ -171,7 +273,7 @@ export default function AnalysisDashboard({
   <div class="badge">Status: ${esc(label)} · Manual: ${esc(analysis.manualSource || "EMBRAPA / Padrão Global")}</div>
   <div class="grid">
     <div class="card"><small>${esc(displayedRainLabel)}</small><strong>${esc(displayedRainText)} mm</strong></div>
-    <div class="card"><small>Umidade Solo / Raiz SMAP</small><strong>${esc(analysis.soilMoisture)}%${typeof analysis.rootZoneMoisture === "number" ? ` / ${esc(analysis.rootZoneMoisture)}%` : ""}</strong></div>
+    <div class="card"><small>Umidade Solo / Raiz SMAP</small><strong>${esc(displayedSoilMoisture)}%${typeof analysis.rootZoneMoisture === "number" ? ` / ${esc(analysis.rootZoneMoisture)}%` : ""}</strong></div>
     <div class="card"><small>Vento a 2m</small><strong>${esc(analysis.windSpeedKmh ?? "—")} km/h</strong></div>
     <div class="card"><small>Pressão Atmosférica</small><strong>${esc(analysis.pressureHpa ?? "—")} hPa</strong></div>
     <div class="card"><small>Delta-T / Umidade Relativa</small><strong>${typeof analysis.deltaT === "number" ? `${esc(analysis.deltaT)} °C (${esc(analysis.umidadeRelativaPct ?? "—")}%)` : "—"}</strong></div>
@@ -192,16 +294,33 @@ export default function AnalysisDashboard({
 
   return (
     <div className="dashboard entrance">
+      <header className="telemetry-heading">
+        <div className="telemetry-title">
+          <span className="eyebrow">CENTRO DE COMANDO AGRÍCOLA</span>
+          <h1>Talhão <span>•</span> Campo Mourão, PR</h1>
+          <span className={`telemetry-badge ${isDemo ? "is-demo" : "is-live"}`}>
+            <i aria-hidden="true" />
+            {isDemo ? "CENÁRIO DEMONSTRATIVO · SEM TELEMETRIA AO VIVO" : "TELEMETRIA API ATIVA"}
+          </span>
+        </div>
+        <div className="telemetry-meta">
+          <span><Sprout size={14} /> {field.crop}</span>
+          <span className="telemetry-mono">{formatNumber(field.areaHectares)} ha</span>
+          <span><CalendarDays size={14} /> {todayLabel}</span>
+          <span className="telemetry-mono"><MapPin size={14} /> {field.centroid.lat.toFixed(5)}, {field.centroid.lng.toFixed(5)}</span>
+        </div>
+        <FieldWeatherSnapshot weather={currentWeather} />
+      </header>
       <div className="analysis-dashboard-hero">
         {mapWindow}
         <div className="analysis-overview">
           <section className="field-layer-selector" aria-label="Camadas orbitais do talhão">
             <div className="layer-selector-heading">
               <div>
-                <span className="eyebrow">VISUALIZAÇÃO DO TALHÃO</span>
-                <h2>Camadas orbitais</h2>
+                <span className="eyebrow">SELETOR INTERATIVO</span>
+                <h2>Telemetria do talhão</h2>
               </div>
-              <span className="layer-change-hint">O mapa atualiza ao selecionar</span>
+              <span className="layer-change-hint">Selecione para pintar o polígono</span>
             </div>
             <div
               className="field-layer-buttons"
@@ -210,18 +329,45 @@ export default function AnalysisDashboard({
             >
               {layerButtons.map(({ id, Icon }) => {
                 const view = getFieldLayerView(analysis, id, currentWeather);
+                const outsideIdeal =
+                  view.progress !== null &&
+                  (view.progress.value < view.progress.idealStart ||
+                    view.progress.value > view.progress.idealEnd);
                 return (
                   <button
                     key={id}
                     type="button"
-                    className="field-layer-button"
+                    className={`field-layer-button ${activeLayer === id ? "is-active" : ""} ${outsideIdeal ? "is-warning" : ""}`}
                     aria-pressed={activeLayer === id}
                     aria-label={`${view.title}: ${view.buttonValue}`}
                     onClick={() => onLayerChange(id)}
                   >
-                    <Icon size={15} />
-                    <span>{view.buttonLabel}</span>
-                    <strong>{view.buttonValue}</strong>
+                    <span className="layer-card-title"><Icon size={16} /> {view.buttonLabel}</span>
+                    <strong className="telemetry-mono">{view.buttonValue}</strong>
+                    <span className="layer-card-status">{view.status}</span>
+                    {view.progress && (
+                      <span
+                        className={`layer-progress ${outsideIdeal ? "is-outside" : "is-ideal"}`}
+                        role="img"
+                        aria-label={`Valor ${view.progress.value} de ${view.progress.max}; zona ideal ${view.progress.idealStart} a ${view.progress.idealEnd}`}
+                      >
+                        <i
+                          className="layer-progress-ideal"
+                          style={{
+                            left: `${(view.progress.idealStart / view.progress.max) * 100}%`,
+                            width: `${((view.progress.idealEnd - view.progress.idealStart) / view.progress.max) * 100}%`,
+                          }}
+                        />
+                        <i
+                          className="layer-progress-value"
+                          style={{ width: `${(view.progress.value / view.progress.max) * 100}%` }}
+                        />
+                        <i
+                          className="layer-progress-marker"
+                          style={{ left: `${(view.progress.value / view.progress.max) * 100}%` }}
+                        />
+                      </span>
+                    )}
                   </button>
                 );
               })}
@@ -247,6 +393,100 @@ export default function AnalysisDashboard({
           </section>
         </div>
       </div>
+      <div className={`risk-banner risk-${analysis.risk}`}>
+        <AlertTriangle size={25} />
+        <div className="risk-copy">
+          <span className="eyebrow">
+            {isDemo ? "ALERTA DO CENÁRIO · NÃO É LEITURA AO VIVO" : "ALERTA OPERACIONAL DE HOJE"}
+            {typeof analysis.riskScore === "number"
+              ? ` · ÍNDICE ${analysis.riskScore}/100`
+              : ""}
+          </span>
+          <h2>{label}</h2>
+          <p className="tactical-order">{displayedGuidance}</p>
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={handleExportPdf}
+          aria-label="Exportar parecer em PDF"
+        >
+          <FileDown size={15} /> Exportar PDF
+        </Button>
+      </div>
+      <section className="operations-panel" aria-label="Janela operacional de hoje">
+        <div className="operations-heading">
+          <div>
+            <span className="eyebrow">JANELA OPERACIONAL DE HOJE</span>
+            <h2><Clock3 size={16} /> Timeline de campo</h2>
+          </div>
+          <span className={`data-mode-chip ${isDemo ? "is-demo" : ""}`}>
+            {currentWeather ? "TEMPERATURA · OPEN-METEO" : "SEM PREVISÃO HORÁRIA"}
+          </span>
+        </div>
+        <div className="timeline-grid">
+          <div className={`timeline-cell ${weatherWindows.morning ? "timeline-good" : "timeline-muted"}`}>
+            <div className="timeline-period-heading">
+              <strong>Manhã <small>06h–10h30</small></strong>
+              <b className="telemetry-mono">{formatTemperatureWindow(weatherWindows.morning)}</b>
+              <small>{formatHumidityWindow(weatherWindows.morning)}</small>
+            </div>
+            <div className="timeline-operation">
+              <span>Pulverização</span>
+              <strong className={weatherWindows.morning?.maxTemperatureC && weatherWindows.morning.maxTemperatureC > 30 ? "timeline-blocked" : "timeline-good"}>
+                {morningThermalStatus}
+              </strong>
+              <small>Confirme vento, ΔT e bula do produto; temperatura sozinha não libera a aplicação.</small>
+            </div>
+            <div className="timeline-operation">
+              <span>Maquinário</span>
+              <strong className={trafficAttention ? "timeline-warning" : "timeline-muted"}>
+                {trafficAttention ? "ATENÇÃO EM BAIXADAS" : "VISTORIA LOCAL"}
+              </strong>
+              <small>{trafficDetail}{isDemo ? " (indicador demonstrativo)" : ""}</small>
+            </div>
+          </div>
+          <div className={`timeline-cell ${weatherWindows.afternoon ? (afternoonBlocked ? "timeline-blocked" : "timeline-warning") : "timeline-muted"}`}>
+            <div className="timeline-period-heading">
+              <strong>Tarde <small>10h30–17h</small></strong>
+              <b className="telemetry-mono">{formatTemperatureWindow(weatherWindows.afternoon)}</b>
+              <small>{formatHumidityWindow(weatherWindows.afternoon)}</small>
+            </div>
+            <div className="timeline-operation">
+              <span>Pulverização</span>
+              <strong className={afternoonBlocked ? "timeline-blocked" : "timeline-warning"}>
+                {afternoonThermalStatus}
+              </strong>
+              <small>{afternoonDetail}. Temperatura prevista não substitui vento, ΔT ou rótulo.</small>
+            </div>
+            <div className="timeline-operation">
+              <span>Maquinário</span>
+              <strong className="timeline-warning">VISTORIA ANTES DO TRÁFEGO</strong>
+              <small>Sem medição de suporte do solo ou compactação no talhão.</small>
+            </div>
+          </div>
+          <div className={`timeline-cell ${weatherWindows.evening ? "timeline-good" : "timeline-muted"}`}>
+            <div className="timeline-period-heading">
+              <strong>Fim de tarde / noite <small>17h–22h</small></strong>
+              <b className="telemetry-mono">{formatTemperatureWindow(weatherWindows.evening, true)}</b>
+              <small>{formatHumidityWindow(weatherWindows.evening)}</small>
+            </div>
+            <div className="timeline-operation">
+              <span>Pulverização</span>
+              <strong className={weatherWindows.evening?.maxTemperatureC && weatherWindows.evening.maxTemperatureC > 30 ? "timeline-blocked" : "timeline-good"}>
+                {eveningThermalStatus}
+              </strong>
+              <small>Revalidar vento, ΔT e umidade relativa antes de qualquer aplicação.</small>
+            </div>
+            <div className="timeline-operation">
+              <span>Maquinário</span>
+              <strong className="timeline-warning">REAVALIAR CONDIÇÃO DO SOLO</strong>
+              <small>Use vistoria presencial; umidade orbital não mede trafegabilidade.</small>
+            </div>
+          </div>
+        </div>
+      </section>
       <div className="dashboard-tabs" role="tablist" aria-label="Painéis da análise">
         <button
           type="button"
@@ -269,53 +509,12 @@ export default function AnalysisDashboard({
           Rotação de Culturas
         </button>
       </div>
-      <div className={`risk-banner risk-${analysis.risk}`}>
-        <AlertTriangle size={30} />
-        <div>
-          <span className="eyebrow">
-            ALERTA DO TALHÃO
-            {typeof analysis.riskScore === "number"
-              ? ` · ÍNDICE DE RISCO ${analysis.riskScore}/100`
-              : ""}
-          </span>
-          <h2>{label}</h2>
+      {analysis.manualSource && (
+        <div className="field-summary">
+          <span><BookOpen size={14} /> Manual oficial: {analysis.manualSource} ({analysis.regionCode || "BR"})</span>
+          <span>Stress test: {climateLabel} · {isDemo ? "cenário demonstrativo" : "diagnóstico do back-end"}</span>
         </div>
-        <span className="risk-source">
-          <Satellite size={15} />{" "}
-          {analysis.source === "demo"
-            ? "Monitoramento simulado • NASA GPM"
-            : `${analysis.dataSources || "NASA POWER"} • ${analysis.manualSource || "IA"}`}
-        </span>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={handleExportPdf}
-          aria-label="Exportar parecer em PDF"
-        >
-          <FileDown size={15} /> Exportar PDF
-        </Button>
-      </div>
-      <div className="field-summary">
-        <span>
-          <Sprout size={16} /> {field.crop} · {formatNumber(field.areaHectares)} ha
-        </span>
-        <span>
-          {field.centroid.lat.toFixed(5)}, {field.centroid.lng.toFixed(5)}
-        </span>
-        {analysis.manualSource && (
-          <span>
-            <BookOpen size={15} /> Manual Oficial: <strong>{analysis.manualSource}</strong> (
-            {analysis.regionCode || "BR"})
-          </span>
-        )}
-        <span>
-          Stress test: {climateLabel} ·{" "}
-          {analysis.source === "demo"
-            ? "demonstração, não é previsão real"
-            : "diagnóstico do back-end"}
-        </span>
-      </div>
+      )}
       {analysis.fallbackReason && (
         <p className="fallback-notice" role="status">
           {analysis.fallbackReason}
@@ -425,7 +624,7 @@ export default function AnalysisDashboard({
                 <div>
                   <Droplets size={18} />
                   <strong>
-                    {analysis.soilMoisture}
+                    {displayedSoilMoisture}
                     <small>%</small>
                   </strong>
                   <span>
@@ -553,6 +752,17 @@ export default function AnalysisDashboard({
                   </span>
                 </div>
               )}
+                <div className="rain-chart-heading">
+                  <div>
+                    <span className="eyebrow">
+                      {isDemo
+                        ? "DEMONSTRAÇÃO · REFERÊNCIAS NASA GPM / POWER"
+                        : `${analysis.dataSources || "DADOS DO BACK-END"} · BALANÇO HÍDRICO`}
+                    </span>
+                    <h3>Precipitação: média histórica × acumulado de hoje</h3>
+                  </div>
+                  <span>{displayedRainLabel}</span>
+                </div>
               <div className="rain-chart">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart
@@ -561,9 +771,7 @@ export default function AnalysisDashboard({
                       {
                         name: currentWeather
                           ? "Acumulado hoje Open-Meteo"
-                          : analysis.source === "demo"
-                            ? "Cenário demonstrativo"
-                            : "Pico NASA POWER",
+                          : "Acumulado hoje indisponível",
                         forecast: displayedRain,
                       },
                     ]}
@@ -592,7 +800,7 @@ export default function AnalysisDashboard({
                     />
                     <Bar
                       dataKey="forecast"
-                      name={currentWeather ? "Acumulado estimado hoje (mm)" : displayedRainLabel}
+                      name={displayedRainLabel}
                       fill={`var(--${analysis.risk === "red" ? "destructive" : analysis.risk === "yellow" ? "warning" : "safe"})`}
                       radius={[4, 4, 0, 0]}
                       barSize={56}
@@ -710,11 +918,14 @@ export default function AnalysisDashboard({
             </div>
           </div>
           <p className="section-subtitle">
-            Resiliência começa no solo. Compare caminhos para proteger o próximo ciclo.
+            Compare três estratégias para a próxima safra. Pontuações são indicativas, não uma prescrição agronômica.
           </p>
           <div className="rotation-grid">
             {strategies.map((s, i) => (
-              <article key={s.title} className={`rotation-card ${i === 1 ? "recommended" : ""}`}>
+              <article
+                key={s.title}
+                className={`rotation-card ${i === 1 ? "recommended" : ""} ${selectedStrategy === s.title ? "is-selected" : ""}`}
+              >
                 <span className="eyebrow">
                   {i === 1 && <Check size={14} />} {s.tag}
                 </span>
@@ -727,6 +938,13 @@ export default function AnalysisDashboard({
                   <span>Resiliência estimada</span>
                 </div>
                 <progress value={s.score} max={100} />
+                <p className="rotation-summary">
+                  {i === 0
+                    ? "Risco alto de erosão e perda de adubo."
+                    : i === 1
+                      ? "Mais palhada, retenção de umidade e proteção no período chuvoso."
+                      : "Proteção rápida do solo e apoio ao controle de plantas daninhas."}
+                </p>
                 <dl>
                   <dt>Benefício principal</dt>
                   <dd>{s.benefit}</dd>
@@ -738,9 +956,31 @@ export default function AnalysisDashboard({
                 <span className="strategy-footnote">
                   Pontuação ilustrativa · validar com agrônomo
                 </span>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={selectedStrategy === s.title ? "default" : "outline"}
+                  aria-pressed={selectedStrategy === s.title}
+                  onClick={() => setSelectedStrategy(s.title)}
+                >
+                  {selectedStrategy === s.title ? "Selecionada" : "Selecionar estratégia"}
+                </Button>
               </article>
             ))}
           </div>
+          <details className="scientific-transparency">
+            <summary>Transparência Científica: Fontes NASA &amp; Limitações (Data Gaps)</summary>
+            <div className="scientific-source-list">
+              {["NASA POWER", "SMAP", "GPM", "MODIS", "SRTM"].map((source) => (
+                <span key={source}>{source}</span>
+              ))}
+            </div>
+            <p>
+              As fontes acima são referências de dados e camadas previstas pela plataforma; a disponibilidade
+              depende da integração ativa. Dados orbitais não substituem análise química do solo e não detectam
+              compactação profunda ou nematoides. Confirme recomendações com vistoria local e assistência técnica.
+            </p>
+          </details>
         </section>
       )}
       <p className="disclaimer">

@@ -2,8 +2,17 @@ const CAMPO_MOURAO_COORDINATES = { latitude: -24.045, longitude: -52.383 };
 
 export interface CurrentWeather {
   temperatureC: number;
+  relativeHumidityPct: number | null;
+  maxTemperatureTodayC: number | null;
   precipitationTodayMm: number;
   time: string;
+  hourlyForecast: HourlyWeatherForecast[];
+}
+
+export interface HourlyWeatherForecast {
+  time: string;
+  temperatureC: number;
+  relativeHumidityPct: number | null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -14,8 +23,9 @@ export async function getCampoMouraoWeather(): Promise<CurrentWeather> {
   const params = new URLSearchParams({
     latitude: String(CAMPO_MOURAO_COORDINATES.latitude),
     longitude: String(CAMPO_MOURAO_COORDINATES.longitude),
-    current: "temperature_2m",
-    hourly: "precipitation",
+    current: "temperature_2m,relative_humidity_2m",
+    hourly: "precipitation,temperature_2m,relative_humidity_2m",
+    daily: "temperature_2m_max",
     temperature_unit: "celsius",
     timezone: "America/Sao_Paulo",
   });
@@ -41,6 +51,11 @@ export async function getCampoMouraoWeather(): Promise<CurrentWeather> {
   ) {
     throw new Error("Temperatura inválida do Open-Meteo");
   }
+  const humidity = current["relative_humidity_2m"];
+  const relativeHumidityPct =
+    typeof humidity === "number" && Number.isFinite(humidity) && humidity >= 0 && humidity <= 100
+      ? humidity
+      : null;
 
   if (!isRecord(result["hourly"])) throw new Error("Precipitação inválida do Open-Meteo");
   const hourly = result["hourly"];
@@ -55,6 +70,9 @@ export async function getCampoMouraoWeather(): Promise<CurrentWeather> {
   }
 
   const today = time.slice(0, 10);
+  const hourlyTemperatures = hourly["temperature_2m"];
+  const hourlyHumidity = hourly["relative_humidity_2m"];
+  const hourlyForecast: HourlyWeatherForecast[] = [];
   let precipitationTodayMm = 0;
   let hasTodayReading = false;
   for (let index = 0; index < times.length; index += 1) {
@@ -71,8 +89,59 @@ export async function getCampoMouraoWeather(): Promise<CurrentWeather> {
       precipitationTodayMm += amount;
       hasTodayReading = true;
     }
+    const hourlyTemperature = Array.isArray(hourlyTemperatures)
+      ? hourlyTemperatures[index]
+      : undefined;
+    if (
+      typeof hour === "string" &&
+      hour.startsWith(`${today}T`) &&
+      typeof hourlyTemperature === "number" &&
+      Number.isFinite(hourlyTemperature) &&
+      hourlyTemperature >= -90 &&
+      hourlyTemperature <= 60
+    ) {
+      const hourlyHumidityPct = Array.isArray(hourlyHumidity) ? hourlyHumidity[index] : undefined;
+      hourlyForecast.push({
+        time: hour,
+        temperatureC: hourlyTemperature,
+        relativeHumidityPct:
+          typeof hourlyHumidityPct === "number" &&
+          Number.isFinite(hourlyHumidityPct) &&
+          hourlyHumidityPct >= 0 &&
+          hourlyHumidityPct <= 100
+            ? hourlyHumidityPct
+            : null,
+      });
+    }
   }
   if (!hasTodayReading) throw new Error("Sem leituras de precipitação para hoje");
 
-  return { temperatureC, precipitationTodayMm: Number(precipitationTodayMm.toFixed(1)), time };
+  let maxTemperatureTodayC: number | null = null;
+  if (isRecord(result["daily"])) {
+    const daily = result["daily"];
+    const dailyTimes = daily["time"];
+    const dailyMaxima = daily["temperature_2m_max"];
+    if (Array.isArray(dailyTimes) && Array.isArray(dailyMaxima)) {
+      const todayIndex = dailyTimes.findIndex((date) => date === today);
+      const maximum = dailyMaxima[todayIndex];
+      if (
+        todayIndex >= 0 &&
+        typeof maximum === "number" &&
+        Number.isFinite(maximum) &&
+        maximum >= -90 &&
+        maximum <= 60
+      ) {
+        maxTemperatureTodayC = maximum;
+      }
+    }
+  }
+
+  return {
+    temperatureC,
+    relativeHumidityPct,
+    maxTemperatureTodayC,
+    precipitationTodayMm: Number(precipitationTodayMm.toFixed(1)),
+    time,
+    hourlyForecast,
+  };
 }

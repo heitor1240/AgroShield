@@ -46,6 +46,7 @@ interface Props {
 }
 
 const gradients: [string, string, string][] = [
+  ["agroshield-ndvi", "#047857", "#34D399"],
   ["agroshield-rain-heat-high", "#1E3A8A", "#EF4444"],
   ["agroshield-rain-heat-mid", "#0284C7", "#38BDF8"],
   ["agroshield-rain-heat-low", "#0EA5E9", "#BAE6FD"],

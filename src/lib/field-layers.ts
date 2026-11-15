@@ -1,7 +1,20 @@
 import type { FieldAnalysis, Risk } from "@/services/agroShieldApi";
 import type { CurrentWeather } from "@/services/fieldWeather";
 
-export type FieldMapLayer = "alert" | "rain-heatmap" | "soil-moisture" | "heat" | "cover";
+export type FieldMapLayer =
+  | "alert"
+  | "ndvi"
+  | "rain-heatmap"
+  | "soil-moisture"
+  | "heat"
+  | "cover";
+
+export interface FieldLayerProgress {
+  value: number;
+  max: number;
+  idealStart: number;
+  idealEnd: number;
+}
 
 export interface FieldLayerView {
   title: string;
@@ -16,6 +29,7 @@ export interface FieldLayerView {
   gradientId: string | null;
   isDemo: boolean;
   critical: boolean;
+  progress: FieldLayerProgress | null;
 }
 
 const riskLabels: Record<Risk, string> = {
@@ -60,6 +74,31 @@ export function getFieldLayerView(
       gradientId: null,
       isDemo: analysis.source === "demo",
       critical: analysis.risk === "red",
+      progress: null,
+    };
+  }
+
+  if (layer === "ndvi") {
+    const isDemo = analysis.source === "demo" || analysis.ndviPercent === undefined;
+    const value = boundedPercent(isDemo ? undefined : analysis.ndviPercent, 84);
+    const status =
+      value >= 70 ? "Vigor vegetativo alto" : value >= 50 ? "Vigor moderado" : "Vigor baixo";
+    return {
+      title: "Verde da lavoura",
+      buttonLabel: "Verde da lavoura",
+      buttonValue: `${(value / 100).toFixed(2)} · ${value}%`,
+      markerValue: `🌱 NDVI ${(value / 100).toFixed(2)} (${value}%) · ${status}`,
+      status,
+      source: isDemo
+        ? "Demonstrativo · MODIS/HLS sem leitura ao vivo"
+        : analysis.ndviSource || "MODIS/HLS · NDVI",
+      whyItMatters: "O NDVI indica vigor e uniformidade da vegetação; nuvens e resolução limitam a leitura.",
+      color: "#059669",
+      borderColor: "#10B981",
+      gradientId: "agroshield-ndvi",
+      isDemo,
+      critical: false,
+      progress: { value, max: 100, idealStart: 70, idealEnd: 92 },
     };
   }
 
@@ -106,6 +145,7 @@ export function getFieldLayerView(
           : "agroshield-rain-heat-low",
       isDemo: false,
       critical: false,
+      progress: null,
     };
   }
 
@@ -115,9 +155,14 @@ export function getFieldLayerView(
       analysis.source === "demo" || (!hasRootZone && analysis.soilMoisture === undefined);
     const value = boundedPercent(
       isDemo ? undefined : (analysis.rootZoneMoisture ?? analysis.soilMoisture),
-      78,
+      68,
     );
-    const status = value >= 75 ? "Encharcado" : value >= 50 ? "Úmido" : "Seco";
+    const status =
+      value >= 75
+        ? "Acima da capacidade de campo"
+        : value >= 45
+          ? "Reserva hídrica adequada"
+          : "Solo seco";
     return {
       title: "Umidade do Solo",
       buttonLabel: "Umidade",
@@ -136,21 +181,26 @@ export function getFieldLayerView(
       gradientId: "agroshield-soil-moisture",
       isDemo,
       critical: false,
+      progress: { value, max: 100, idealStart: 45, idealEnd: 70 },
     };
   }
 
   if (layer === "heat") {
     const isDemo = analysis.canopyTempC === undefined || analysis.source === "demo";
-    const value = isDemo ? 31 : (analysis.canopyTempC ?? 31);
-    const status = value >= 30 ? "Atenção Pulverização" : "Faixa moderada";
+    const value = isDemo ? 32.1 : (analysis.canopyTempC ?? 32.1);
+    const status = isDemo
+      ? "Pico térmico demonstrativo · validar pausa"
+      : value >= 30
+        ? "Pico térmico vespertino · avaliar pausa"
+        : "Faixa térmica adequada";
     return {
-      title: "Estresse Térmico",
-      buttonLabel: "Calor",
-      buttonValue: `${Math.round(value)}°C`,
-      markerValue: `🌡️ Temp. Dossel: ${Math.round(value)}°C (${status})`,
+      title: "Calor do Dossel",
+      buttonLabel: "Calor do dossel",
+      buttonValue: `${value.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}°C`,
+      markerValue: `🌡️ Temp. Dossel: ${value.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}°C (${status})`,
       status,
       source: isDemo
-        ? "Demonstrativo · ECOSTRESS indisponível na API"
+        ? "Demonstrativo · NASA ECOSTRESS não conectado"
         : analysis.canopyTempSource || "API · temperatura do dossel",
       whyItMatters:
         "A temperatura do dossel contextualiza estresse térmico e pode alterar a janela de pulverização.",
@@ -159,6 +209,7 @@ export function getFieldLayerView(
       gradientId: "agroshield-heat",
       isDemo,
       critical: false,
+      progress: { value: Math.min(value, 50), max: 50, idealStart: 18, idealEnd: 30 },
     };
   }
 
@@ -175,11 +226,14 @@ export function getFieldLayerView(
     source: isDemo
       ? "Demonstrativo · cobertura não informada pela API"
       : analysis.groundCoverSource || "API · cobertura do solo",
-    whyItMatters: "A cobertura reduz exposição do solo, erosão e perda de água entre safras.",
+    whyItMatters: isDemo
+      ? "Cobertura baixa acelera o aquecimento do solo; avalie rotação com braquiária."
+      : "A cobertura reduz exposição do solo, erosão e perda de água entre safras.",
     color: lowCover ? "#B45309" : "#65A30D",
     borderColor: lowCover ? "#92400E" : "#4D7C0F",
     gradientId: lowCover ? "agroshield-cover-low" : "agroshield-cover-high",
     isDemo,
     critical: false,
+    progress: { value, max: 100, idealStart: 70, idealEnd: 100 },
   };
 }
