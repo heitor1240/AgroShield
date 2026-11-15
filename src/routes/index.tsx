@@ -105,7 +105,7 @@ function Index() {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileExpanded, setMobileExpanded] = useState(false);
   const [layoutVersion, setLayoutVersion] = useState(0);
-  const [activeMapLayer, setActiveMapLayer] = useState<FieldMapLayer>("ndvi");
+  const [activeMapLayer, setActiveMapLayer] = useState<FieldMapLayer>("alert");
   const sidebarRef = useRef<HTMLElement>(null);
   const runId = useRef(0);
   const field = calculateField(points);
@@ -170,7 +170,7 @@ function Index() {
     };
     setRequest(payload);
     setProgress(0);
-    setActiveMapLayer("ndvi");
+    setActiveMapLayer("alert");
     setStep(2);
     const [response] = await Promise.all([
       analyzeField(payload, backendUrl),
@@ -206,7 +206,7 @@ function Index() {
     setDrawing(false);
     setCenter(INITIAL_CENTER);
     setMobileExpanded(false);
-    setActiveMapLayer("ndvi");
+    setActiveMapLayer("alert");
   }
 
   function saveConnection(event: React.FormEvent) {

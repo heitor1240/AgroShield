@@ -213,12 +213,18 @@ export default function FieldMap(props: Props) {
     ? getFieldLayerView(props.analysis, props.activeLayer, props.currentWeather)
     : null;
   const polygonRef = useRef<LeafletPolygon | null>(null);
+  const weatherLat = Number(
+    (props.field?.centroid.lat ?? props.center[0]).toFixed(2),
+  );
+  const weatherLng = Number(
+    (props.field?.centroid.lng ?? props.center[1]).toFixed(2),
+  );
 
   useEffect(() => {
     let active = true;
     async function updateTemperature() {
       try {
-        const current = await getCampoMouraoWeather();
+        const current = await getCampoMouraoWeather(weatherLat, weatherLng);
         if (!active) return;
         setTemperature(current.temperatureC);
         setPrecipitationToday(current.precipitationTodayMm);
@@ -241,7 +247,7 @@ export default function FieldMap(props: Props) {
       active = false;
       window.clearInterval(interval);
     };
-  }, [onWeatherChange]);
+  }, [onWeatherChange, weatherLat, weatherLng]);
 
   useEffect(() => {
     polygonRef.current
@@ -427,8 +433,15 @@ export default function FieldMap(props: Props) {
       </div>
       <div className="map-location">
         <span className="live-dot" />
-        <span className="map-location-name">Campo Mourão, PR</span>
-        <span className="map-coordinates">24°02′ S · 52°23′ O</span>
+        <span className="map-location-name">
+          {props.analysis?.regionName
+            ? props.analysis.regionName.replace(/\s*\(Brasil\)\s*$/i, "")
+            : "Campo Mourão, PR"}
+        </span>
+        <span className="map-coordinates">
+          {Math.abs(weatherLat).toFixed(2)}° {weatherLat <= 0 ? "S" : "N"} ·{" "}
+          {Math.abs(weatherLng).toFixed(2)}° {weatherLng <= 0 ? "O" : "L"}
+        </span>
         <span
           className="map-temperature"
           title={`Open-Meteo${temperatureTime ? ` · Atualizado às ${temperatureTime.slice(11, 16)}` : ""}${temperatureError ? " · Falha ao atualizar" : ""}`}

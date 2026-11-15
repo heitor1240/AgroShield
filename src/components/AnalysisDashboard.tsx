@@ -163,11 +163,16 @@ export default function AnalysisDashboard({
     },
   ];
   const layerButtons = [
-    { id: "ndvi", Icon: Sprout },
+    { id: "alert", Icon: AlertTriangle },
+    { id: "rain-heatmap", Icon: CloudRain },
     { id: "soil-moisture", Icon: Droplets },
     { id: "heat", Icon: Thermometer },
     { id: "cover", Icon: ShieldCheck },
   ] as const;
+  const fieldLocationLabel =
+    analysis.source !== "demo" && analysis.regionName
+      ? analysis.regionName.replace(/\s*\(Brasil\)\s*$/i, "")
+      : "Campo Mourão, PR";
   const activeLayerView = getFieldLayerView(analysis, activeLayer, currentWeather);
   const isDemo = analysis.source === "demo";
   const displayedSoilMoisture = isDemo ? 68 : analysis.soilMoisture;
@@ -297,7 +302,7 @@ export default function AnalysisDashboard({
       <header className="telemetry-heading">
         <div className="telemetry-title">
           <span className="eyebrow">CENTRO DE COMANDO AGRÍCOLA</span>
-          <h1>Talhão <span>•</span> Campo Mourão, PR</h1>
+          <h1>Talhão <span>•</span> {fieldLocationLabel}</h1>
           <span className={`telemetry-badge ${isDemo ? "is-demo" : "is-live"}`}>
             <i aria-hidden="true" />
             {isDemo ? "CENÁRIO DEMONSTRATIVO · SEM TELEMETRIA AO VIVO" : "TELEMETRIA API ATIVA"}
@@ -309,7 +314,7 @@ export default function AnalysisDashboard({
           <span><CalendarDays size={14} /> {todayLabel}</span>
           <span className="telemetry-mono"><MapPin size={14} /> {field.centroid.lat.toFixed(5)}, {field.centroid.lng.toFixed(5)}</span>
         </div>
-        <FieldWeatherSnapshot weather={currentWeather} />
+        <FieldWeatherSnapshot weather={currentWeather} locationLabel={fieldLocationLabel} />
       </header>
       <div className="analysis-dashboard-hero">
         {mapWindow}

@@ -19,10 +19,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-export async function getCampoMouraoWeather(): Promise<CurrentWeather> {
+export async function getCampoMouraoWeather(
+  latitude: number = CAMPO_MOURAO_COORDINATES.latitude,
+  longitude: number = CAMPO_MOURAO_COORDINATES.longitude,
+): Promise<CurrentWeather> {
+  const validCoords =
+    Number.isFinite(latitude) &&
+    Number.isFinite(longitude) &&
+    Math.abs(latitude) <= 90 &&
+    Math.abs(longitude) <= 180;
   const params = new URLSearchParams({
-    latitude: String(CAMPO_MOURAO_COORDINATES.latitude),
-    longitude: String(CAMPO_MOURAO_COORDINATES.longitude),
+    latitude: String(validCoords ? latitude : CAMPO_MOURAO_COORDINATES.latitude),
+    longitude: String(validCoords ? longitude : CAMPO_MOURAO_COORDINATES.longitude),
     current: "temperature_2m,relative_humidity_2m",
     hourly: "precipitation,temperature_2m,relative_humidity_2m",
     daily: "temperature_2m_max",

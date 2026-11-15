@@ -104,4 +104,29 @@ describe("Campo Mourão weather", () => {
 
     await expect(getCampoMouraoWeather()).rejects.toThrow("Sem leituras de precipitação para hoje");
   });
+
+  it("queries custom field coordinates when provided", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          current: {
+            temperature_2m: 29.4,
+            relative_humidity_2m: 64,
+            time: "2026-11-15T10:00",
+          },
+          hourly: {
+            time: ["2026-11-15T09:00", "2026-11-15T10:00"],
+            precipitation: [0.5, 1.2],
+            temperature_2m: [28.0, 29.4],
+          },
+          daily: { time: ["2026-11-15"], temperature_2m_max: [33.0] },
+        }),
+      ),
+    );
+
+    const res = await getCampoMouraoWeather(-12.57, -55.73);
+    expect(res.temperatureC).toBe(29.4);
+    expect(res.precipitationTodayMm).toBe(1.7);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("latitude=-12.57&longitude=-55.73");
+  });
 });

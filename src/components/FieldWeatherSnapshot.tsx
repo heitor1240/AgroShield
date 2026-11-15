@@ -20,18 +20,23 @@ function formatTemperature(value: number) {
 
 export default function FieldWeatherSnapshot({
   weather,
+  locationLabel = "Campo Mourão, PR",
 }: {
   weather: CurrentWeather | null;
+  locationLabel?: string;
 }) {
   return (
-    <section className="weather-snapshot" aria-label="Condições meteorológicas em Campo Mourão">
+    <section
+      className="weather-snapshot"
+      aria-label={`Condições meteorológicas em ${locationLabel}`}
+    >
       <header className="weather-snapshot-header">
         <span className="eyebrow">MONITORAMENTO REGIONAL</span>
         <span className="weather-source-badge">OPEN-METEO · MODELO</span>
       </header>
       <div className="weather-snapshot-main">
         <div className="weather-snapshot-location">
-          <strong>Campo Mourão, PR</strong>
+          <strong>{locationLabel}</strong>
           <span><CalendarDays size={12} /> {formatDayLabel(weather?.time ?? null)}</span>
         </div>
         {weather ? (
