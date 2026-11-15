@@ -38,6 +38,7 @@ import {
   type PlannedOperation,
   type Risk,
 } from "@/services/agroShieldApi";
+import type { CurrentWeather } from "@/services/fieldWeather";
 
 const FieldMap = lazy(() => import("@/components/FieldMap"));
 const rotations = ["Soja → Milho Safrinha", "Monocultura de Soja", "Soja → Trigo"];
@@ -99,6 +100,7 @@ function Index() {
   const [progress, setProgress] = useState(0);
   const [result, setResult] = useState<FieldAnalysis | null>(null);
   const [request, setRequest] = useState<FieldRequest | null>(null);
+  const [currentWeather, setCurrentWeather] = useState<CurrentWeather | null>(null);
   const [simulatingRisk, setSimulatingRisk] = useState<Risk | null>(null);
   const [collapsed, setCollapsed] = useState(false);
   const [mobileExpanded, setMobileExpanded] = useState(false);
@@ -122,6 +124,8 @@ function Index() {
           analysis={analysis}
           activeLayer={activeMapLayer}
           showSearch={showSearch}
+          currentWeather={currentWeather}
+          onWeatherChange={setCurrentWeather}
         />
       </Suspense>
     </ClientOnly>
@@ -536,6 +540,7 @@ function Index() {
                 backendUrl={backendUrl}
                 activeLayer={activeMapLayer}
                 onLayerChange={setActiveMapLayer}
+                currentWeather={currentWeather}
                 mapWindow={
                   <section className="analysis-map-window" aria-label="Mapa do talhão">
                     <header className="analysis-map-header">

@@ -1,4 +1,5 @@
 import type { FieldAnalysis, Risk } from "@/services/agroShieldApi";
+import type { CurrentWeather } from "@/services/fieldWeather";
 
 export type FieldMapLayer = "alert" | "rain-heatmap" | "soil-moisture" | "heat" | "cover";
 
@@ -35,7 +36,11 @@ function boundedPercent(value: number | undefined, fallback: number): number {
     : fallback;
 }
 
-export function getFieldLayerView(analysis: FieldAnalysis, layer: FieldMapLayer): FieldLayerView {
+export function getFieldLayerView(
+  analysis: FieldAnalysis,
+  layer: FieldMapLayer,
+  currentWeather: CurrentWeather | null = null,
+): FieldLayerView {
   if (layer === "alert") {
     const color = riskColors[analysis.risk];
     return {
@@ -59,39 +64,48 @@ export function getFieldLayerView(analysis: FieldAnalysis, layer: FieldMapLayer)
   }
 
   if (layer === "rain-heatmap") {
-    const isDemo = analysis.source === "demo";
-    const rainMm = Math.max(0, Math.round(analysis.predictedRain));
-    const pressureText =
-      typeof analysis.pressureHpa === "number" ? ` · ${analysis.pressureHpa} hPa` : "";
-    const rainHigh =
-      rainMm >= (analysis.rainLimitMm ?? 50) || analysis.pressureTrend === "QUEDA_BRUSCA";
-    const rainModerate =
-      !rainHigh && (rainMm >= 20 || analysis.pressureTrend === "INSTAVEL");
-    const status = rainHigh
-      ? "Chuva Forte / Baixa Pressão"
-      : rainModerate
-        ? "Instável"
-        : "Estável";
+    const rainMm = currentWeather?.precipitationTodayMm;
+    const hasReading = typeof rainMm === "number" && Number.isFinite(rainMm) && rainMm >= 0;
+    const rainHigh = hasReading && rainMm >= 20;
+    const rainModerate = hasReading && rainMm >= 5;
+    const status = !hasReading
+      ? "Sem leitura"
+      : rainHigh
+        ? "Chuva intensa hoje"
+        : rainModerate
+          ? "Chuva moderada hoje"
+          : rainMm > 0
+            ? "Chuva leve hoje"
+            : "Sem chuva hoje";
+    const rainText = hasReading
+      ? `${rainMm.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} mm`
+      : "—";
+    const color = rainHigh ? "#1D4ED8" : rainModerate ? "#0284C7" : "#0EA5E9";
     return {
-      title: "Mapa de Calor de Chuva",
-      buttonLabel: "Mapa de Calor",
-      buttonValue: `${rainMm} mm`,
-      markerValue: `🌧️ Chuva: ${rainMm} mm${pressureText} (${status})`,
+      title: "Precipitação acumulada hoje",
+      buttonLabel: "Chuva hoje",
+      buttonValue: rainText,
+      markerValue: hasReading
+        ? `🌧️ Chuva hoje: ${rainText} (estimativa)`
+        : "🌧️ Acumulado de hoje indisponível",
       status,
-      source: isDemo
-        ? "Demonstrativo · Precipitação e pressão simuladas"
-        : "NASA POWER + Open-Meteo (Chuva + Pressão hPa)",
-      whyItMatters:
-        "O mapa de calor cruza o volume de chuva prevista com a pressão atmosférica (hPa) para antecipar frentes frias e núcleos de chuva sobre o talhão.",
-      color: rainHigh ? "#1D4ED8" : rainModerate ? "#0284C7" : "#0EA5E9",
+      source: hasReading
+        ? `Open-Meteo · acumulado estimado hoje até ${currentWeather?.time.slice(11, 16) ?? "—"}`
+        : "Open-Meteo · leitura de hoje indisponível",
+      whyItMatters: hasReading
+        ? "Acumulado estimado desde a meia-noite com dados meteorológicos de modelo; não é leitura de pluviômetro."
+        : "O acumulado de precipitação de hoje não está disponível no momento.",
+      color,
       borderColor: rainHigh ? "#1E3A8A" : rainModerate ? "#0369A1" : "#0284C7",
-      gradientId: rainHigh
+      gradientId: !hasReading
+        ? null
+        : rainHigh
         ? "agroshield-rain-heat-high"
         : rainModerate
           ? "agroshield-rain-heat-mid"
           : "agroshield-rain-heat-low",
-      isDemo,
-      critical: rainHigh,
+      isDemo: false,
+      critical: false,
     };
   }
 

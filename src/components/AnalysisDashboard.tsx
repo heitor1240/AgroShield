@@ -28,6 +28,7 @@ import {
   type FieldRequest,
   type Sms2GResponse,
 } from "@/services/agroShieldApi";
+import type { CurrentWeather } from "@/services/fieldWeather";
 
 export default function AnalysisDashboard({
   field,
@@ -36,6 +37,7 @@ export default function AnalysisDashboard({
   activeLayer,
   onLayerChange,
   mapWindow,
+  currentWeather,
 }: {
   field: FieldRequest;
   initial: FieldAnalysis;
@@ -43,6 +45,7 @@ export default function AnalysisDashboard({
   activeLayer: FieldMapLayer;
   onLayerChange: (layer: FieldMapLayer) => void;
   mapWindow: ReactNode;
+  currentWeather: CurrentWeather | null;
 }) {
   const [analysis, setAnalysis] = useState(initial);
   const [done, setDone] = useState<number[]>([]);
@@ -104,7 +107,22 @@ export default function AnalysisDashboard({
     { id: "heat", Icon: Thermometer },
     { id: "cover", Icon: ShieldCheck },
   ] as const;
-  const activeLayerView = getFieldLayerView(analysis, activeLayer);
+  const activeLayerView = getFieldLayerView(analysis, activeLayer, currentWeather);
+  const displayedRain = currentWeather?.precipitationTodayMm ?? analysis.predictedRain;
+  const displayedRainText = currentWeather
+    ? formatNumber(currentWeather.precipitationTodayMm)
+    : String(analysis.predictedRain);
+  const displayedRainLabel = currentWeather
+    ? "Precipitação estimada hoje · Open-Meteo"
+    : analysis.source === "demo"
+      ? "Previsão demonstrativa (24h)"
+      : "Chuva prevista (24h)";
+  const displayedDemoWeatherContext =
+    currentWeather && analysis.source === "demo"
+      ? `Este alerta é demonstrativo, não uma previsão ao vivo. A precipitação acumulada estimada hoje em Campo Mourão é ${displayedRainText} mm até ${currentWeather.time.slice(11, 16)} (Open-Meteo; modelo meteorológico, não leitura de pluviômetro).`
+      : null;
+  const displayedGuidance = displayedDemoWeatherContext ?? analysis.guidance;
+  const displayedTechnicalReason = displayedDemoWeatherContext ?? analysis.technicalReason;
 
   async function handleSendSms2G(event: React.FormEvent) {
     event.preventDefault();
@@ -152,7 +170,7 @@ export default function AnalysisDashboard({
   </div>
   <div class="badge">Status: ${esc(label)} · Manual: ${esc(analysis.manualSource || "EMBRAPA / Padrão Global")}</div>
   <div class="grid">
-    <div class="card"><small>Chuva Prevista (24h)</small><strong>${esc(analysis.predictedRain)} mm</strong></div>
+    <div class="card"><small>${esc(displayedRainLabel)}</small><strong>${esc(displayedRainText)} mm</strong></div>
     <div class="card"><small>Umidade Solo / Raiz SMAP</small><strong>${esc(analysis.soilMoisture)}%${typeof analysis.rootZoneMoisture === "number" ? ` / ${esc(analysis.rootZoneMoisture)}%` : ""}</strong></div>
     <div class="card"><small>Vento a 2m</small><strong>${esc(analysis.windSpeedKmh ?? "—")} km/h</strong></div>
     <div class="card"><small>Pressão Atmosférica</small><strong>${esc(analysis.pressureHpa ?? "—")} hPa</strong></div>
@@ -160,11 +178,11 @@ export default function AnalysisDashboard({
     <div class="card"><small>Score de Risco</small><strong>${esc(analysis.riskScore ?? "—")}/100</strong></div>
   </div>
   <h2>Orientação Tática</h2>
-  <p>${esc(analysis.guidance)}</p>
+  <p>${esc(displayedGuidance)}</p>
   <h2>Checklist Operacional</h2>
   <ul>${actionsHtml}</ul>
   <h2>Fundamentação Técnica</h2>
-  <p>${esc(analysis.technicalReason)}</p>
+  <p>${esc(displayedTechnicalReason)}</p>
 </body>
 </html>`);
     win.document.close();
@@ -191,7 +209,7 @@ export default function AnalysisDashboard({
               aria-label="Selecionar camada do mapa"
             >
               {layerButtons.map(({ id, Icon }) => {
-                const view = getFieldLayerView(analysis, id);
+                const view = getFieldLayerView(analysis, id, currentWeather);
                 return (
                   <button
                     key={id}
@@ -363,7 +381,7 @@ export default function AnalysisDashboard({
                 </div>
                 <span className="small-badge">Próximas 24h</span>
               </div>
-              <p className="guidance">{analysis.guidance}</p>
+              <p className="guidance">{displayedGuidance}</p>
               <div className="task-heading">
                 Plano de ação <span>{done.length}/3 concluídas</span>
               </div>
@@ -398,10 +416,10 @@ export default function AnalysisDashboard({
                 <div>
                   <CloudRain size={18} />
                   <strong>
-                    {analysis.predictedRain} <small>mm</small>
+                    {displayedRainText} <small>mm</small>
                   </strong>
                   <span>
-                    Chuva NASA ({analysis.rainLimitMm ? `máx ${analysis.rainLimitMm}mm` : "48h"})
+                    {displayedRainLabel}
                   </span>
                 </div>
                 <div>
@@ -540,7 +558,14 @@ export default function AnalysisDashboard({
                   <BarChart
                     data={[
                       { name: "Histórico NASA", normal: analysis.historicalRain },
-                      { name: "Pico NASA POWER", forecast: analysis.predictedRain },
+                      {
+                        name: currentWeather
+                          ? "Acumulado hoje Open-Meteo"
+                          : analysis.source === "demo"
+                            ? "Cenário demonstrativo"
+                            : "Pico NASA POWER",
+                        forecast: displayedRain,
+                      },
                     ]}
                     margin={{ top: 12, right: 15, left: -20, bottom: 0 }}
                   >
@@ -567,7 +592,7 @@ export default function AnalysisDashboard({
                     />
                     <Bar
                       dataKey="forecast"
-                      name="Pico NASA (mm)"
+                      name={currentWeather ? "Acumulado estimado hoje (mm)" : displayedRainLabel}
                       fill={`var(--${analysis.risk === "red" ? "destructive" : analysis.risk === "yellow" ? "warning" : "safe"})`}
                       radius={[4, 4, 0, 0]}
                       barSize={56}
@@ -584,7 +609,7 @@ export default function AnalysisDashboard({
                 Justificativa técnica ({analysis.manualSource || "EMBRAPA / ZARC"}){" "}
                 <ChevronDown className={technical ? "rotate-180" : ""} />
               </Button>
-              {technical && <p className="technical-copy">{analysis.technicalReason}</p>}
+              {technical && <p className="technical-copy">{displayedTechnicalReason}</p>}
             </section>
           </div>
           <section className="sms-section">

@@ -12,11 +12,22 @@ import {
   useMapEvents,
 } from "react-leaflet";
 import { divIcon, type Polygon as LeafletPolygon } from "leaflet";
-import { Search, LocateFixed, Plus, Minus, Layers, LoaderCircle } from "lucide-react";
+import {
+  Search,
+  LocateFixed,
+  Plus,
+  Minus,
+  Layers,
+  LoaderCircle,
+  Thermometer,
+  CloudRain,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { INITIAL_CENTER, formatNumber, type Coordinate } from "@/lib/field";
 import { getFieldLayerView, type FieldMapLayer } from "@/lib/field-layers";
 import type { FieldAnalysis, FieldRequest } from "@/services/agroShieldApi";
+import { getCampoMouraoWeather, type CurrentWeather } from "@/services/fieldWeather";
+import { searchLocation } from "@/services/locationSearch";
 
 interface Props {
   points: Coordinate[];
@@ -30,6 +41,8 @@ interface Props {
   analysis: FieldAnalysis | null;
   activeLayer: FieldMapLayer;
   showSearch: boolean;
+  currentWeather: CurrentWeather | null;
+  onWeatherChange: (weather: CurrentWeather | null) => void;
 }
 
 const gradients: [string, string, string][] = [
@@ -156,12 +169,14 @@ function FieldCentroidMarker({
   field,
   analysis,
   activeLayer,
+  currentWeather,
 }: {
   field: FieldRequest;
   analysis: FieldAnalysis;
   activeLayer: FieldMapLayer;
+  currentWeather: CurrentWeather | null;
 }) {
-  const layerView = getFieldLayerView(analysis, activeLayer);
+  const layerView = getFieldLayerView(analysis, activeLayer, currentWeather);
   const icon = useMemo(
     () =>
       divIcon({
@@ -184,11 +199,48 @@ function FieldCentroidMarker({
 }
 
 export default function FieldMap(props: Props) {
+  const { onWeatherChange } = props;
   const [query, setQuery] = useState("");
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState("");
-  const layerView = props.analysis ? getFieldLayerView(props.analysis, props.activeLayer) : null;
+  const [temperature, setTemperature] = useState<number | null>(null);
+  const [precipitationToday, setPrecipitationToday] = useState<number | null>(null);
+  const [temperatureTime, setTemperatureTime] = useState("");
+  const [temperatureLoading, setTemperatureLoading] = useState(true);
+  const [temperatureError, setTemperatureError] = useState(false);
+  const layerView = props.analysis
+    ? getFieldLayerView(props.analysis, props.activeLayer, props.currentWeather)
+    : null;
   const polygonRef = useRef<LeafletPolygon | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    async function updateTemperature() {
+      try {
+        const current = await getCampoMouraoWeather();
+        if (!active) return;
+        setTemperature(current.temperatureC);
+        setPrecipitationToday(current.precipitationTodayMm);
+        setTemperatureTime(current.time);
+        setTemperatureError(false);
+        onWeatherChange(current);
+      } catch {
+        if (active) {
+          setTemperatureError(true);
+          onWeatherChange(null);
+        }
+      } finally {
+        if (active) setTemperatureLoading(false);
+      }
+    }
+
+    void updateTemperature();
+    const interval = window.setInterval(() => void updateTemperature(), 15 * 60 * 1000);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, [onWeatherChange]);
 
   useEffect(() => {
     polygonRef.current
@@ -228,19 +280,14 @@ export default function FieldMap(props: Props) {
     setSearching(true);
     setError("");
     try {
-      const res = await fetch(
-        `https://nominatim.openstreetmap.org/search?format=json&countrycodes=br&limit=1&q=${encodeURIComponent(query)}`,
-      );
-      if (!res.ok) throw new Error();
-      const results = (await res.json()) as { lat: string; lon: string }[];
-      const result = results[0];
-      if (!result) {
+      const location = await searchLocation(query.trim());
+      if (!location) {
         setError("Local não encontrado. Tente cidade e estado.");
         return;
       }
-      props.onCenterChange([Number(result.lat), Number(result.lon)]);
+      props.onCenterChange(location);
     } catch {
-      setError("Busca indisponível. Você pode navegar pelo mapa.");
+      setError("Serviços de localização indisponíveis. Você pode navegar pelo mapa.");
     } finally {
       setSearching(false);
     }
@@ -275,6 +322,7 @@ export default function FieldMap(props: Props) {
           <TileLayer url={radarUrl} opacity={props.activeLayer === "rain-heatmap" ? 0.65 : 0.55} />
         )}
         {props.activeLayer === "rain-heatmap" &&
+          !props.currentWeather &&
           props.analysis?.rainHeatmapGrid?.map((cell) => {
             const color =
               cell.rain24hMm >= 45
@@ -324,6 +372,7 @@ export default function FieldMap(props: Props) {
             field={props.field}
             analysis={props.analysis}
             activeLayer={props.activeLayer}
+            currentWeather={props.currentWeather}
           />
         )}
         <MapBehavior {...props} />
@@ -376,7 +425,41 @@ export default function FieldMap(props: Props) {
         </button>
       </div>
       <div className="map-location">
-        <span className="live-dot" /> Campo Mourão, PR <span>24°02′ S · 52°23′ O</span>
+        <span className="live-dot" />
+        <span className="map-location-name">Campo Mourão, PR</span>
+        <span className="map-coordinates">24°02′ S · 52°23′ O</span>
+        <span
+          className="map-temperature"
+          title={`Open-Meteo${temperatureTime ? ` · Atualizado às ${temperatureTime.slice(11, 16)}` : ""}${temperatureError ? " · Falha ao atualizar" : ""}`}
+          aria-label={
+            temperature === null
+              ? "Temperatura atual indisponível"
+              : `Temperatura atual em Campo Mourão: ${temperature.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} graus Celsius`
+          }
+        >
+          <Thermometer size={13} aria-hidden="true" />
+          {temperature !== null
+            ? `${temperature.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}°C ${temperatureError ? "última leitura" : "agora"}`
+            : temperatureLoading
+              ? "Carregando temperatura"
+              : "Temperatura indisponível"}
+        </span>
+        <span
+          className="map-precipitation"
+          title={`Acumulado estimado pela Open-Meteo até ${temperatureTime.slice(11, 16) || "agora"}; não é leitura de pluviômetro${temperatureError ? " · Falha ao atualizar" : ""}`}
+          aria-label={
+            precipitationToday === null
+              ? "Precipitação de hoje indisponível"
+              : `Precipitação estimada acumulada hoje: ${precipitationToday.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} milímetros`
+          }
+        >
+          <CloudRain size={13} aria-hidden="true" />
+          {precipitationToday !== null
+            ? `${precipitationToday.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} mm hoje est.`
+            : temperatureLoading
+              ? "Carregando chuva"
+              : "Chuva indisponível"}
+        </span>
       </div>
     </div>
   );

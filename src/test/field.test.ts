@@ -75,9 +75,10 @@ describe("Orbital field layers", () => {
   it("labels unavailable satellite metrics as illustrative demo values", () => {
     const analysis = makeDemoAnalysis();
     expect(getFieldLayerView(analysis, "rain-heatmap")).toMatchObject({
-      buttonLabel: "Mapa de Calor",
-      buttonValue: "112 mm",
-      isDemo: true,
+      buttonLabel: "Chuva hoje",
+      buttonValue: "—",
+      source: "Open-Meteo · leitura de hoje indisponível",
+      isDemo: false,
     });
     expect(getFieldLayerView(analysis, "soil-moisture")).toMatchObject({
       buttonValue: "78%",
@@ -104,8 +105,20 @@ describe("Orbital field layers", () => {
       isDemo: false,
     });
     expect(getFieldLayerView(analysis, "rain-heatmap")).toMatchObject({
-      buttonValue: "42 mm",
-      status: "Chuva Forte / Baixa Pressão",
+      buttonValue: "—",
+      status: "Sem leitura",
+    });
+    expect(
+      getFieldLayerView(analysis, "rain-heatmap", {
+        temperatureC: 21.7,
+        precipitationTodayMm: 0.4,
+        time: "2026-11-15T08:45",
+      }),
+    ).toMatchObject({
+      buttonLabel: "Chuva hoje",
+      buttonValue: "0,4 mm",
+      markerValue: "🌧️ Chuva hoje: 0,4 mm (estimativa)",
+      source: "Open-Meteo · acumulado estimado hoje até 08:45",
       isDemo: false,
     });
     expect(getFieldLayerView(analysis, "heat").buttonValue).toBe("32°C");
