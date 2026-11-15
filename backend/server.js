@@ -1952,6 +1952,23 @@ function auditarSms2GContraFisica(textoIaBruto, fieldReq, nasaMetrics) {
   return texto;
 }
 
+async function enviarViaSimpleSmsGateway(phone, message) {
+  const gatewayUrl = process.env.SIMPLE_SMS_GATEWAY_URL;
+  if (!gatewayUrl || !phone || !message) return false;
+  try {
+    await axios.post(
+      gatewayUrl,
+      { phone: String(phone).trim(), message: String(message).slice(0, 150) },
+      { timeout: 4500 }
+    );
+    console.log(`📲 [SIMPLE SMS GATEWAY] Enviado para ${phone}: "${message}"`);
+    return true;
+  } catch (err) {
+    console.warn('[AVISO SIMPLE SMS GATEWAY]:', err.message);
+    return false;
+  }
+}
+
 /**
  * Disparo ativo de SMS quando a análise do talhão retorna "red" (Perigo Severo)
  */
@@ -1969,6 +1986,8 @@ async function dispararAlertaSms2G(
     0,
     150
   );
+
+  await enviarViaSimpleSmsGateway(fone, textoSms);
 
   const sid = process.env.TWILIO_ACCOUNT_SID;
   const token = process.env.TWILIO_AUTH_TOKEN;
@@ -2107,6 +2126,11 @@ Responda em NO MÁXIMO 145 CARACTERES começando com "AGROSHIELD: " e dizendo cl
     const respostaSmsSegura = auditarSms2GContraFisica(textoIaSms, fieldReq, nasaMetrics);
     const twimlXml = `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${escaparXmlTwiml(respostaSmsSegura)}</Message></Response>`;
 
+    const telefoneExplicito = req.body?.telefone || req.body?.From;
+    const enviadoGatewayReal = telefoneExplicito
+      ? await enviarViaSimpleSmsGateway(telefoneExplicito, respostaSmsSegura)
+      : false;
+
     const logInteracao = {
       tipo: 'INBOUND_CONVERSATIONAL_2G',
       de: telefoneRemetente,
@@ -2116,6 +2140,7 @@ Responda em NO MÁXIMO 145 CARACTERES começando com "AGROSHIELD: " e dizendo cl
       risco_fisico: nasaMetrics.minPhysicalRisk,
       resposta_sms: respostaSmsSegura,
       caracteres: respostaSmsSegura.length,
+      enviado_sms_real: enviadoGatewayReal,
       twiml: twimlXml,
       timestamp: new Date().toISOString(),
     };

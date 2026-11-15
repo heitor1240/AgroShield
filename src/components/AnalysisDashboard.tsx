@@ -51,6 +51,7 @@ export default function AnalysisDashboard({
   const [smsQuestion, setSmsQuestion] = useState(
     `Posso pulverizar ${field.crop} agora neste talhão?`,
   );
+  const [smsPhone, setSmsPhone] = useState("");
   const [smsLoading, setSmsLoading] = useState(false);
   const [smsReply, setSmsReply] = useState<Sms2GResponse | null>(null);
   const [showTwiml, setShowTwiml] = useState(false);
@@ -110,7 +111,7 @@ export default function AnalysisDashboard({
     if (!smsQuestion.trim()) return;
     setSmsLoading(true);
     try {
-      setSmsReply(await sendSms2GQuery(smsQuestion, field, backendUrl, analysis));
+      setSmsReply(await sendSms2GQuery(smsQuestion, field, backendUrl, analysis, smsPhone));
     } finally {
       setSmsLoading(false);
     }
@@ -616,6 +617,16 @@ export default function AnalysisDashboard({
               </label>
               <div className="sms-input-row">
                 <input
+                  id="sms-phone"
+                  type="tel"
+                  className="select-control"
+                  style={{ maxWidth: "230px" }}
+                  value={smsPhone}
+                  onChange={(event) => setSmsPhone(event.target.value)}
+                  placeholder="Telefone real (opcional, ex.: 44999874707)"
+                  aria-label="Telefone para envio real de SMS (opcional)"
+                />
+                <input
                   id="sms-input"
                   type="text"
                   className="select-control"
@@ -640,6 +651,7 @@ export default function AnalysisDashboard({
                   <span>
                     <strong>Resposta SMS 2G ({smsReply.caracteres}/150 caracteres)</strong> · Fonte:{" "}
                     {smsReply.fonte_manual} ({smsReply.regiao})
+                    {smsReply.enviado_sms_real ? " · 📲 SMS real enviado!" : ""}
                   </span>
                   <Button
                     variant="ghost"

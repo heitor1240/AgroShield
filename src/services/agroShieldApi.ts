@@ -67,6 +67,7 @@ export interface Sms2GResponse {
   risco_fisico: Risk;
   resposta_sms: string;
   caracteres: number;
+  enviado_sms_real?: boolean;
   twiml: string;
   timestamp: string;
 }
@@ -314,17 +315,19 @@ export async function sendSms2GQuery(
   field: FieldRequest,
   backendUrl = "http://localhost:3000",
   analysis?: Partial<FieldAnalysis> | null,
+  telefone?: string,
 ): Promise<Sms2GResponse> {
   const base = backendUrl.trim().replace(/\/$/, "");
   if (!base) {
     return makeDemoSms2GResponse(mensagem, field, analysis);
   }
   try {
+    const cleanPhone = telefone?.trim();
     const response = await fetch(`${base}/api/sms-responder?format=json`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        From: "+5544999874707",
+        ...(cleanPhone ? { From: cleanPhone, telefone: cleanPhone } : {}),
         Body: mensagem,
         crop: field.crop,
         centroid: field.centroid,
