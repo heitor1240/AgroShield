@@ -377,8 +377,8 @@ h1 { font-size: 30px; line-height: 1.3; font-weight: 800; margin: 8px 0; }
 }
 
 .sms-section { margin-top: 24px; padding: 23px; border: 1px solid var(--border); background: var(--card); border-radius: 7px; }
-.sms-outbound-alert { margin-top: 16px; padding: 14px 16px; border-radius: 6px; border: 1px solid var(--destructive); background: oklch(0.97 0.02 27); font-size: 11px; line-height: 1.6; }
-.sms-outbound-alert strong { display: block; color: var(--destructive); margin-bottom: 4px; }
+.sms-outbound-alert { margin-top: 16px; padding: 14px 16px; border-radius: 8px; border: 1px solid rgb(239 68 68 / 45%); background: linear-gradient(130deg, rgb(127 29 29 / 48%), rgb(38 12 11 / 82%)); font-size: 11px; line-height: 1.6; color: var(--foreground); }
+.sms-outbound-alert strong { display: block; color: #fca5a5; margin-bottom: 4px; }
 .sms-outbound-alert p { margin: 0; font-family: monospace; color: var(--foreground); }
 .sms-simulator-form { margin-top: 18px; }
 .sms-input-row { display: flex; gap: 10px; align-items: center; }
@@ -391,16 +391,16 @@ h1 { font-size: 30px; line-height: 1.3; font-weight: 800; margin: 8px 0; }
 .markov-strip strong { color: var(--primary); font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px; }
 .operation-inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 16px; }
 .operation-field { display: flex; flex-direction: column; }
-.operation-plan-card { margin-bottom: 22px; padding: 18px 20px; border-radius: 7px; border: 1px solid var(--border); background: var(--card); border-left: 5px solid var(--primary); }
-.operation-plan-card.plan-nao_recomendada { border-left-color: var(--destructive); background: oklch(0.985 0.01 27); }
-.operation-plan-card.plan-atencao { border-left-color: var(--warning); background: oklch(0.985 0.015 70); }
-.operation-plan-card.plan-liberada { border-left-color: var(--safe); background: oklch(0.985 0.015 150); }
+.operation-plan-card { margin-bottom: 14px; padding: 16px 18px; border-radius: 12px; border: 1px solid var(--border); background: var(--card); border-left: 5px solid var(--primary); color: var(--foreground); }
+.operation-plan-card.plan-nao_recomendada { border-color: rgb(239 68 68 / 40%); border-left-color: #ef4444; background: linear-gradient(130deg, rgb(127 29 29 / 45%), rgb(20 12 12 / 88%)); }
+.operation-plan-card.plan-atencao { border-color: rgb(245 158 11 / 40%); border-left-color: #f59e0b; background: linear-gradient(130deg, rgb(120 53 15 / 42%), rgb(24 18 10 / 88%)); }
+.operation-plan-card.plan-liberada { border-color: rgb(16 185 129 / 38%); border-left-color: #10b981; background: linear-gradient(130deg, rgb(6 78 59 / 44%), rgb(9 26 19 / 88%)); }
 .operation-plan-top { display: flex; justify-content: space-between; align-items: center; gap: 14px; flex-wrap: wrap; }
-.operation-plan-top h3 { font-size: 17px; font-weight: 800; margin: 4px 0 0; }
-.operation-accuracy-badge { display: flex; flex-direction: column; align-items: center; padding: 8px 14px; border-radius: 6px; background: var(--card); border: 1px solid var(--border); min-width: 105px; }
-.operation-accuracy-badge strong { font-size: 22px; font-weight: 800; color: var(--primary); line-height: 1.1; }
+.operation-plan-top h3 { font-size: 16px; font-weight: 800; margin: 4px 0 0; color: var(--foreground); }
+.operation-accuracy-badge { display: flex; flex-direction: column; align-items: center; padding: 8px 14px; border-radius: 8px; background: rgb(5 15 11 / 78%); border: 1px solid var(--border); min-width: 105px; }
+.operation-accuracy-badge strong { font-size: 22px; font-weight: 800; color: #34d399; line-height: 1.1; }
 .operation-accuracy-badge span { font-size: 9px; color: var(--muted-foreground); text-transform: uppercase; letter-spacing: 0.4px; }
-.operation-plan-rec { font-size: 13px; font-weight: 600; line-height: 1.6; margin: 12px 0; }
+.operation-plan-rec { font-size: 13px; font-weight: 600; line-height: 1.6; margin: 12px 0; color: #e2f1ea; }
 .operation-plan-meta { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 11px; color: var(--muted-foreground); }
 
 .analysis-dashboard-hero {
