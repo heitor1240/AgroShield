@@ -621,6 +621,22 @@ registrarResultado(
     `Estável=${pisoEstavel.riskScore} -> Queda=${pisoQueda.riskScore}`
   );
 
+  // ============================================================================
+  // TESTE 29: Delta-T para segurança de pulverização (Umidade Relativa + Temp Ar)
+  // ============================================================================
+  const { calcularDeltaT } = require('./server');
+  const dtIdeal = calcularDeltaT(24, 68);
+  const dtSeco = calcularDeltaT(35, 22);
+  registrarResultado(
+    'Teste 29: Delta-T classifica janela ideal (2-8°C) vs evaporação alta (>10°C)',
+    dtIdeal.deltaTStatus === 'IDEAL' &&
+      dtIdeal.deltaT >= 2 &&
+      dtIdeal.deltaT <= 8 &&
+      dtSeco.deltaTStatus === 'EVAPORACAO_ALTA' &&
+      dtSeco.deltaT > 10,
+    `Ideal=${dtIdeal.deltaT}°C (${dtIdeal.deltaTStatus}) | Seco=${dtSeco.deltaT}°C (${dtSeco.deltaTStatus})`
+  );
+
   console.log('\n============================================================================');
   console.log(`📊 RESUMO DA AUDITORIA: ${testesPassados.length} passaram | ${bugsEncontrados.length} bugs encontrados`);
   console.log('============================================================================');

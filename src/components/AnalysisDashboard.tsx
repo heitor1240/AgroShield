@@ -16,6 +16,7 @@ import {
   Radio,
   LoaderCircle,
   Thermometer,
+  FileDown,
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { Button } from "@/components/ui/button";
@@ -115,6 +116,61 @@ export default function AnalysisDashboard({
     }
   }
 
+  function handleExportPdf() {
+    const win = window.open("", "_blank", "width=900,height=720");
+    if (!win) return;
+    const esc = (v: unknown) =>
+      String(v ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+    const actionsHtml = analysis.actions.map((a) => `<li>${esc(a)}</li>`).join("");
+    win.document.write(`<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <title>Parecer AgroShield — ${esc(field.crop)}</title>
+  <style>
+    body { font-family: Arial, sans-serif; color: #111827; padding: 32px; line-height: 1.5; }
+    h1 { margin: 0 0 4px; font-size: 22px; color: #064E3B; }
+    .meta { color: #4B5563; font-size: 13px; margin-bottom: 20px; }
+    .badge { display: inline-block; padding: 4px 10px; border-radius: 999px; font-weight: bold; font-size: 12px; background: #F3F4F6; }
+    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 16px 0; }
+    .card { border: 1px solid #E5E7EB; border-radius: 8px; padding: 12px; }
+    .card small { display: block; color: #6B7280; font-size: 11px; }
+    .card strong { font-size: 18px; }
+    h2 { font-size: 15px; margin-top: 20px; border-bottom: 1px solid #E5E7EB; padding-bottom: 4px; }
+  </style>
+</head>
+<body>
+  <h1>AgroShield — Parecer Técnico do Talhão</h1>
+  <div class="meta">
+    Cultura: <strong>${esc(field.crop)}</strong> · Área: <strong>${esc(formatNumber(field.areaHectares))} ha</strong> ·
+    Coordenadas: ${esc(field.centroid.lat.toFixed(5))}, ${esc(field.centroid.lng.toFixed(5))} ·
+    Emitido em: ${esc(new Date().toLocaleString("pt-BR"))}
+  </div>
+  <div class="badge">Status: ${esc(label)} · Manual: ${esc(analysis.manualSource || "EMBRAPA / Padrão Global")}</div>
+  <div class="grid">
+    <div class="card"><small>Chuva Prevista (24h)</small><strong>${esc(analysis.predictedRain)} mm</strong></div>
+    <div class="card"><small>Umidade Solo / Raiz SMAP</small><strong>${esc(analysis.soilMoisture)}%${typeof analysis.rootZoneMoisture === "number" ? ` / ${esc(analysis.rootZoneMoisture)}%` : ""}</strong></div>
+    <div class="card"><small>Vento a 2m</small><strong>${esc(analysis.windSpeedKmh ?? "—")} km/h</strong></div>
+    <div class="card"><small>Pressão Atmosférica</small><strong>${esc(analysis.pressureHpa ?? "—")} hPa</strong></div>
+    <div class="card"><small>Delta-T / Umidade Relativa</small><strong>${typeof analysis.deltaT === "number" ? `${esc(analysis.deltaT)} °C (${esc(analysis.umidadeRelativaPct ?? "—")}%)` : "—"}</strong></div>
+    <div class="card"><small>Score de Risco</small><strong>${esc(analysis.riskScore ?? "—")}/100</strong></div>
+  </div>
+  <h2>Orientação Tática</h2>
+  <p>${esc(analysis.guidance)}</p>
+  <h2>Checklist Operacional</h2>
+  <ul>${actionsHtml}</ul>
+  <h2>Fundamentação Técnica</h2>
+  <p>${esc(analysis.technicalReason)}</p>
+</body>
+</html>`);
+    win.document.close();
+    win.focus();
+    win.print();
+  }
+
   return (
     <div className="dashboard entrance">
       <div className="analysis-dashboard-hero">
@@ -211,6 +267,15 @@ export default function AnalysisDashboard({
             ? "Monitoramento simulado • NASA GPM"
             : `${analysis.dataSources || "NASA POWER"} • ${analysis.manualSource || "IA"}`}
         </span>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={handleExportPdf}
+          aria-label="Exportar parecer em PDF"
+        >
+          <FileDown size={15} /> Exportar PDF
+        </Button>
       </div>
       <div className="field-summary">
         <span>
@@ -376,6 +441,25 @@ export default function AnalysisDashboard({
                       {typeof analysis.pressureDropHpa === "number" && analysis.pressureDropHpa < 0
                         ? ` · ${analysis.pressureDropHpa} hPa`
                         : ""})
+                    </span>
+                  </div>
+                )}
+                {typeof analysis.deltaT === "number" && (
+                  <div>
+                    <Thermometer size={18} />
+                    <strong>
+                      {analysis.deltaT} <small>°C ΔT</small>
+                    </strong>
+                    <span>
+                      Pulverização:{" "}
+                      {analysis.deltaTStatus === "IDEAL"
+                        ? "Ideal (2–8°C)"
+                        : analysis.deltaTStatus === "EVAPORACAO_ALTA"
+                          ? "Evaporação alta (>10°C)"
+                          : "Atenção"}
+                      {typeof analysis.umidadeRelativaPct === "number"
+                        ? ` · UR ${analysis.umidadeRelativaPct}%`
+                        : ""}
                     </span>
                   </div>
                 )}

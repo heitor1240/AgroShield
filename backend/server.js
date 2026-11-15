@@ -252,9 +252,64 @@ const cacheDiagnosticoIa = new Map();
  * Fonte auxiliar em tempo real (0h de atraso + próximas 24h) via Open-Meteo (gratuita, global, sem chave).
  * Preenche a janela de latência de 2-7 dias da NASA POWER mantendo a NASA como fonte principal.
  */
+/**
+ * Calcula o Delta-T (diferença entre temperatura de bulbo seco e bulbo úmido, Stull 2011)
+ * para segurança de pulverização: ideal entre 2°C e 8°C; > 10°C indica alta evaporação da gota.
+ */
+function calcularDeltaT(tempC, rhPct) {
+  if (!Number.isFinite(tempC) || !Number.isFinite(rhPct) || rhPct <= 0 || rhPct > 100) {
+    return { deltaT: null, deltaTStatus: null };
+  }
+  const tw =
+    tempC * Math.atan(0.151977 * Math.sqrt(rhPct + 8.313659)) +
+    Math.atan(tempC + rhPct) -
+    Math.atan(rhPct - 1.676331) +
+    0.00391838 * Math.pow(rhPct, 1.5) * Math.atan(0.023101 * rhPct) -
+    4.686035;
+  const deltaT = Number(Math.max(0, tempC - tw).toFixed(1));
+  const deltaTStatus =
+    deltaT >= 2 && deltaT <= 8 ? 'IDEAL' : deltaT > 10 ? 'EVAPORACAO_ALTA' : 'ATENCAO';
+  return { deltaT, deltaTStatus };
+}
+
+async function buscarGradeRegionalChuva(lat, lng) {
+  try {
+    const offsets = [
+      { label: 'Centro (Talhão)', dLat: 0, dLng: 0 },
+      { label: 'Norte (~13 km)', dLat: 0.12, dLng: 0 },
+      { label: 'Sul (~13 km)', dLat: -0.12, dLng: 0 },
+      { label: 'Leste (~13 km)', dLat: 0, dLng: 0.12 },
+      { label: 'Oeste (~13 km)', dLat: 0, dLng: -0.12 },
+    ];
+    const lats = offsets.map((o) => (lat + o.dLat).toFixed(4)).join(',');
+    const lngs = offsets.map((o) => (lng + o.dLng).toFixed(4)).join(',');
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lats}&longitude=${lngs}&hourly=pressure_msl&daily=precipitation_sum&forecast_days=2&timezone=auto`;
+    const res = await axios.get(url, { timeout: 2500 });
+    const items = Array.isArray(res.data) ? res.data : [res.data];
+    return offsets.map((o, idx) => {
+      const item = items[idx] || {};
+      const rainList = Array.isArray(item?.daily?.precipitation_sum)
+        ? item.daily.precipitation_sum.filter((v) => typeof v === 'number' && Number.isFinite(v))
+        : [];
+      const pressList = Array.isArray(item?.hourly?.pressure_msl)
+        ? item.hourly.pressure_msl.filter((v) => typeof v === 'number' && Number.isFinite(v))
+        : [];
+      return {
+        label: o.label,
+        lat: Number((lat + o.dLat).toFixed(4)),
+        lng: Number((lng + o.dLng).toFixed(4)),
+        rain24hMm: rainList.length > 0 ? Math.round(rainList[0]) : 0,
+        pressureHpa: pressList.length > 0 ? Number(pressList[0].toFixed(1)) : null,
+      };
+    });
+  } catch {
+    return [];
+  }
+}
+
 async function buscarOpenMeteoTempoReal(lat, lng) {
   try {
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&hourly=soil_temperature_0cm,soil_moisture_0_to_1cm,wind_speed_10m,precipitation,pressure_msl&daily=precipitation_sum,wind_speed_10m_max,et0_fao_evapotranspiration&past_days=1&forecast_days=7&timezone=auto`;
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&hourly=soil_temperature_0cm,soil_moisture_0_to_1cm,wind_speed_10m,precipitation,pressure_msl,temperature_2m,relative_humidity_2m&daily=precipitation_sum,wind_speed_10m_max,et0_fao_evapotranspiration&past_days=1&forecast_days=7&timezone=auto`;
     const res = await axios.get(url, { timeout: 2500 });
     const daily = res?.data?.daily || {};
     const hourly = res?.data?.hourly || {};
@@ -293,6 +348,23 @@ async function buscarOpenMeteoTempoReal(lat, lng) {
       tempsSolo.length > 0 ? Number(tempsSolo[tempsSolo.length - 1].toFixed(1)) : null;
     const soilVolumetricM3 =
       umidSoloVol.length > 0 ? Number(umidSoloVol[umidSoloVol.length - 1].toFixed(3)) : null;
+
+    const hTempAir = Array.isArray(hourly.temperature_2m) ? hourly.temperature_2m : [];
+    const hRh = Array.isArray(hourly.relative_humidity_2m) ? hourly.relative_humidity_2m : [];
+    const tempArRaw =
+      typeof hTempAir[24] === 'number' && Number.isFinite(hTempAir[24])
+        ? hTempAir[24]
+        : hTempAir.find((v) => typeof v === 'number' && Number.isFinite(v));
+    const rhRaw =
+      typeof hRh[24] === 'number' && Number.isFinite(hRh[24])
+        ? hRh[24]
+        : hRh.find((v) => typeof v === 'number' && Number.isFinite(v));
+    const tempArC = typeof tempArRaw === 'number' ? Number(tempArRaw.toFixed(1)) : null;
+    const umidadeRelativaPct = typeof rhRaw === 'number' ? Math.round(rhRaw) : null;
+    const { deltaT, deltaTStatus } =
+      tempArC !== null && umidadeRelativaPct !== null
+        ? calcularDeltaT(tempArC, umidadeRelativaPct)
+        : { deltaT: null, deltaTStatus: null };
 
     // Pressão atmosférica ao nível do mar (hPa) e queda barométrica nas próximas 24h (índice 24..47)
     const hPress = Array.isArray(hourly.pressure_msl) ? hourly.pressure_msl : [];
@@ -383,6 +455,10 @@ async function buscarOpenMeteoTempoReal(lat, lng) {
       balancoHidrico7dMm,
       soilTempC,
       soilVolumetricM3,
+      tempArC,
+      umidadeRelativaPct,
+      deltaT,
+      deltaTStatus,
       pressureHpa,
       pressureDropHpa,
       pressureTrend,
@@ -668,13 +744,15 @@ async function buscarDadosNasaParaFrontEnd(lat, lng) {
     // 2. Daily: Precipitação (PRECTOTCORR), Umidade Superficial (GWETTOP), Umidade Zona Radicular SMAP (GWETROOT) e Vento a 2m (WS2M)
     const urlDaily = `https://power.larc.nasa.gov/api/temporal/daily/point?parameters=PRECTOTCORR,GWETTOP,GWETROOT,WS2M&community=AG&longitude=${lng}&latitude=${lat}&start=${dataInicio}&end=${dataFim}&format=JSON`;
 
-    const [resClima, resDaily, openMeteo, ensembleRaw, soilGrids] = await Promise.all([
-      axios.get(urlClimatology, { timeout: 3500 }),
-      axios.get(urlDaily, { timeout: 3500 }),
-      buscarOpenMeteoTempoReal(lat, lng),
-      buscarEnsemble14Dias(lat, lng),
-      buscarPerfilSoloSoilGrids(lat, lng),
-    ]);
+    const [resClima, resDaily, openMeteo, ensembleRaw, soilGrids, rainHeatmapGrid] =
+      await Promise.all([
+        axios.get(urlClimatology, { timeout: 3500 }),
+        axios.get(urlDaily, { timeout: 3500 }),
+        buscarOpenMeteoTempoReal(lat, lng),
+        buscarEnsemble14Dias(lat, lng),
+        buscarPerfilSoloSoilGrids(lat, lng),
+        buscarGradeRegionalChuva(lat, lng),
+      ]);
     const ensemble14d = ensembleRaw
       ? {
           ...ensembleRaw,
@@ -767,9 +845,14 @@ async function buscarDadosNasaParaFrontEnd(lat, lng) {
       rootZoneMoisture,
       soilTempC: openMeteo?.soilTempC ?? null,
       soilVolumetricM3: openMeteo?.soilVolumetricM3 ?? null,
+      tempArC: openMeteo?.tempArC ?? null,
+      umidadeRelativaPct: openMeteo?.umidadeRelativaPct ?? null,
+      deltaT: openMeteo?.deltaT ?? null,
+      deltaTStatus: openMeteo?.deltaTStatus ?? null,
       pressureHpa: openMeteo?.pressureHpa ?? null,
       pressureDropHpa: openMeteo?.pressureDropHpa ?? null,
       pressureTrend: openMeteo?.pressureTrend ?? null,
+      rainHeatmapGrid: Array.isArray(rainHeatmapGrid) ? rainHeatmapGrid : [],
       soilGrids: soilGrids || null,
       forecastPorData: openMeteo?.forecastPorData || {},
       windSpeed2m,
@@ -1357,9 +1440,14 @@ function auditarEFormatarParaFrontEnd(iaJsonBruto, fieldReq, nasaMetrics) {
     rootZoneMoisture: Number(nasaMetrics.rootZoneMoisture ?? soilMoisture),
     soilTempC: nasaMetrics.soilTempC ?? null,
     soilVolumetricM3: nasaMetrics.soilVolumetricM3 ?? null,
+    tempArC: nasaMetrics.tempArC ?? null,
+    umidadeRelativaPct: nasaMetrics.umidadeRelativaPct ?? null,
+    deltaT: nasaMetrics.deltaT ?? null,
+    deltaTStatus: nasaMetrics.deltaTStatus ?? null,
     pressureHpa: nasaMetrics.pressureHpa ?? null,
     pressureDropHpa: nasaMetrics.pressureDropHpa ?? null,
     pressureTrend: nasaMetrics.pressureTrend ?? null,
+    rainHeatmapGrid: Array.isArray(nasaMetrics.rainHeatmapGrid) ? nasaMetrics.rainHeatmapGrid : [],
     soilGrids: nasaMetrics.soilGrids ?? null,
     riskScore: Number(nasaMetrics.riskScore ?? 50),
     windSpeedKmh: Number(ventoKmh),
@@ -2128,4 +2216,5 @@ module.exports = {
   aplicarCenarioClimatico,
   atualizarMemoriaAgricola,
   validarAssinaturaTwilio,
+  calcularDeltaT,
 };

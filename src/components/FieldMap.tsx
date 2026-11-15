@@ -4,8 +4,10 @@ import {
   TileLayer,
   Polygon,
   Polyline,
+  Circle,
   CircleMarker,
   Marker,
+  Tooltip,
   useMap,
   useMapEvents,
 } from "react-leaflet";
@@ -272,6 +274,38 @@ export default function FieldMap(props: Props) {
         {(radarOn || props.activeLayer === "rain-heatmap") && radarUrl && (
           <TileLayer url={radarUrl} opacity={props.activeLayer === "rain-heatmap" ? 0.65 : 0.55} />
         )}
+        {props.activeLayer === "rain-heatmap" &&
+          props.analysis?.rainHeatmapGrid?.map((cell) => {
+            const color =
+              cell.rain24hMm >= 45
+                ? "#EF4444"
+                : cell.rain24hMm >= 20
+                  ? "#1D4ED8"
+                  : cell.rain24hMm >= 5
+                    ? "#0284C7"
+                    : "#38BDF8";
+            return (
+              <Circle
+                key={cell.label}
+                center={[cell.lat, cell.lng]}
+                radius={6500}
+                pathOptions={{
+                  color,
+                  weight: 1,
+                  opacity: 0.45,
+                  fillColor: color,
+                  fillOpacity: 0.24,
+                }}
+              >
+                <Tooltip direction="top" opacity={0.95}>
+                  <span>
+                    {cell.label}: {cell.rain24hMm} mm
+                    {typeof cell.pressureHpa === "number" ? ` · ${cell.pressureHpa} hPa` : ""}
+                  </span>
+                </Tooltip>
+              </Circle>
+            );
+          })}
         {props.points.length >= 3 ? (
           <Polygon ref={polygonRef} positions={props.points} pathOptions={boundaryOptions} />
         ) : (

@@ -95,9 +95,20 @@ export interface FieldAnalysis {
   rootZoneMoisture?: number;
   soilTempC?: number | null;
   soilVolumetricM3?: number | null;
+  tempArC?: number | null;
+  umidadeRelativaPct?: number | null;
+  deltaT?: number | null;
+  deltaTStatus?: string | null;
   pressureHpa?: number | null;
   pressureDropHpa?: number | null;
   pressureTrend?: "QUEDA_BRUSCA" | "INSTAVEL" | "ESTAVEL" | string | null;
+  rainHeatmapGrid?: Array<{
+    label: string;
+    lat: number;
+    lng: number;
+    rain24hMm: number;
+    pressureHpa: number | null;
+  }>;
   ndviPercent?: number;
   ndviSource?: string;
   canopyTempC?: number;
