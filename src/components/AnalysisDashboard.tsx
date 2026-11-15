@@ -4,6 +4,7 @@ import {
   Check,
   ChevronDown,
   ShieldCheck,
+  Sprout,
   Gauge,
   Satellite,
   CloudRain,
