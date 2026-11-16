@@ -66,6 +66,9 @@ function MapBehavior({
 }: Props) {
   const map = useMap();
   useEffect(() => {
+    (window as unknown as { __agroMap?: unknown }).__agroMap = map;
+  }, [map]);
+  useEffect(() => {
     map.setView(center, 14, { animate: false });
   }, [map, center]);
   useEffect(() => {

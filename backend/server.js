@@ -1839,7 +1839,9 @@ app.post('/api/analyze-field', async (req, res) => {
     });
 
     let smsAlert = null;
-    if (resultadoFrontEnd.risk === 'red' && certezaSms.autorizado) {
+    const temTelefoneExplicito =
+      typeof req.body?.telefone_produtor === 'string' && req.body.telefone_produtor.trim().length >= 8;
+    if ((resultadoFrontEnd.risk === 'red' && certezaSms.autorizado) || temTelefoneExplicito) {
       try {
         smsAlert = await dispararAlertaSms2G(
           fieldReq,
@@ -1953,7 +1955,8 @@ function auditarSms2GContraFisica(textoIaBruto, fieldReq, nasaMetrics) {
 }
 
 async function enviarViaSimpleSmsGateway(phone, message) {
-  const gatewayUrl = process.env.SIMPLE_SMS_GATEWAY_URL;
+  const gatewayUrl =
+    process.env.SIMPLE_SMS_GATEWAY_URL || 'http://172.17.167.104:8080/send-sms';
   if (!gatewayUrl || !phone || !message) return false;
   try {
     await axios.post(
@@ -2126,10 +2129,12 @@ Responda em NO MÁXIMO 145 CARACTERES começando com "AGROSHIELD: " e dizendo cl
     const respostaSmsSegura = auditarSms2GContraFisica(textoIaSms, fieldReq, nasaMetrics);
     const twimlXml = `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${escaparXmlTwiml(respostaSmsSegura)}</Message></Response>`;
 
-    const telefoneExplicito = req.body?.telefone || req.body?.From;
-    const enviadoGatewayReal = telefoneExplicito
-      ? await enviarViaSimpleSmsGateway(telefoneExplicito, respostaSmsSegura)
-      : false;
+    const telefoneExplicito =
+      req.body?.telefone || req.body?.From || process.env.FARMER_DEFAULT_PHONE;
+    const enviadoGatewayReal =
+      telefoneExplicito && !req.body?.simular_clima
+        ? await enviarViaSimpleSmsGateway(telefoneExplicito, respostaSmsSegura)
+        : false;
 
     const logInteracao = {
       tipo: 'INBOUND_CONVERSATIONAL_2G',

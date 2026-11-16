@@ -6,8 +6,10 @@ export type Coordinate = [number, number]; // latitude, longitude
 export type Crop = 'Soja' | 'Milho' | 'Trigo' | 'Outro';
 export const INITIAL_CENTER: Coordinate = [-24.045, -52.383];
 export const EXAMPLE_FIELD: Coordinate[] = [
-  [-24.0357, -52.4038], [-24.0351, -52.3982],
-  [-24.0398, -52.3976], [-24.0404, -52.4032],
+  [-24.0118, -52.4415],
+  [-24.0125, -52.4338],
+  [-24.0182, -52.4348],
+  [-24.0175, -52.4425],
 ];
 export function calculateField(points: Coordinate[]) {
   if (points.length < 3) return null;

@@ -278,7 +278,10 @@ function Index() {
               setStep(1);
               setPoints(EXAMPLE_FIELD);
               setDrawing(false);
-              setCenter(INITIAL_CENTER);
+              const exField = calculateField(EXAMPLE_FIELD);
+              setCenter(
+                exField ? [exField.centroid.lat, exField.centroid.lng] : INITIAL_CENTER,
+              );
             }}
           >
             Usar Talhão Exemplo
